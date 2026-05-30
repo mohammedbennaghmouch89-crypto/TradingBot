@@ -106,14 +106,15 @@ pointValue = input.float(2.0, "Point value ($/point)", minval=0.0, step=0.5, gro
 
 // ---- Visuals ----
 grpViz     = "Visuals"
-showHisto  = input.bool(true,  "Draw profile histogram", group=grpViz)
-showNodes  = input.bool(true,  "Mark HVN / LVN",         group=grpViz)
+showHisto  = input.bool(false, "Draw profile histogram", group=grpViz)
+showNodes  = input.bool(false, "Mark HVN / LVN",         group=grpViz)
 showFVG    = input.bool(true,  "Draw entry FVG box",     group=grpViz)
 lblSizeOpt = input.string("normal", "Entry label size", options=["small","normal","large","huge"], group=grpViz)
 lblGapAtr  = input.float(0.6, "Entry label gap above candle (x ATR)", minval=0.0, maxval=5.0, step=0.1, group=grpViz,
      tooltip="How far above the candle the entry label floats, so it does not overlap the bar, the FVG box or the arrow.")
-colPOC     = input.color(color.new(color.orange, 0),  "POC",  group=grpViz)
-colVA      = input.color(color.new(color.blue,  0),   "VAH/VAL", group=grpViz)
+colPOC     = input.color(color.new(color.black, 0),   "POC",  group=grpViz)
+colVAH     = input.color(color.new(color.green, 0),   "VAH",  group=grpViz)
+colVAL     = input.color(color.new(color.red,   0),   "VAL",  group=grpViz)
 colHist    = input.color(color.new(color.gray,  70),  "Histogram", group=grpViz)
 colLong    = input.color(color.new(color.teal,  0),   "Long",  group=grpViz)
 colShort   = input.color(color.new(color.red,   0),   "Short", group=grpViz)
@@ -480,10 +481,10 @@ if barstate.islast
     [pl1, pb1] = f_setLevel(pocLine, pocLbl, poc, colPOC, "POC")
     pocLine := pl1
     pocLbl  := pb1
-    [vl1, vb1] = f_setLevel(vahLine, vahLbl, vah, colVA, "VAH")
+    [vl1, vb1] = f_setLevel(vahLine, vahLbl, vah, colVAH, "VAH")
     vahLine := vl1
     vahLbl  := vb1
-    [vl2, vb2] = f_setLevel(valLine, valLbl, val, colVA, "VAL")
+    [vl2, vb2] = f_setLevel(valLine, valLbl, val, colVAL, "VAL")
     valLine := vl2
     valLbl  := vb2
     // naked POC as a dashed line

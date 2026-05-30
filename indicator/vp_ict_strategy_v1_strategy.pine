@@ -32,8 +32,9 @@ breakevenAt = input.float(0.5, "Breakeven at (frac of target)", minval=0.0, maxv
 flatEOD = input.bool(true, "Flatten at session close", group=gFilt)
 gViz = "Visuals"
 showFVG = input.bool(true, "Draw entry FVG box", group=gViz)
-colPOC = input.color(color.orange, "POC", group=gViz)
-colVA = input.color(color.blue, "VAH/VAL", group=gViz)
+colPOC = input.color(color.black, "POC", group=gViz)
+colVAH = input.color(color.green, "VAH", group=gViz)
+colVAL = input.color(color.red, "VAL", group=gViz)
 colLong = input.color(color.teal, "Long", group=gViz)
 colShort = input.color(color.red, "Short", group=gViz)
 
@@ -342,11 +343,11 @@ if barstate.islast
         line.set_xy1(pocLine, bar_index - 1, poc)
         line.set_xy2(pocLine, bar_index, poc)
     if not na(vah)
-        vahLine := na(vahLine) ? line.new(bar_index - 1, vah, bar_index, vah, color=colVA, width=2, extend=extend.right) : vahLine
+        vahLine := na(vahLine) ? line.new(bar_index - 1, vah, bar_index, vah, color=colVAH, width=2, extend=extend.right) : vahLine
         line.set_xy1(vahLine, bar_index - 1, vah)
         line.set_xy2(vahLine, bar_index, vah)
     if not na(val)
-        valLine := na(valLine) ? line.new(bar_index - 1, val, bar_index, val, color=colVA, width=2, extend=extend.right) : valLine
+        valLine := na(valLine) ? line.new(bar_index - 1, val, bar_index, val, color=colVAL, width=2, extend=extend.right) : valLine
         line.set_xy1(valLine, bar_index - 1, val)
         line.set_xy2(valLine, bar_index, val)
     if useNPOC and nakedActive and not na(nakedPoc)
