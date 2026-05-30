@@ -29,10 +29,10 @@ coverage.xml
 .env.*
 !.env.example
 
-# Data / logs / artifacts
+# Data / logs / artifacts (top-level only; not the bot's data/ package)
 *.log
-data/
-logs/
+/data/
+/logs/
 *.csv
 *.parquet
 
