@@ -58,6 +58,21 @@ third-party packages can't be installed.
 | `test_reference_files_are_nonempty_and_cite_sources` | Each reference file is substantial and has a `## Sources` section. | Keeps ICT claims auditable and flags botched writes. |
 | `test_key_conventions_documented` | SKILL.md keeps the key conventions (`America/New_York`, `useCloseForBreak`, `0.705`). | These are the rules most likely to cause indicator/chart mismatches if dropped. |
 
+### `tests/test_volume_profile_skill.py`
+
+Structural-integrity tests for the **Volume Profile skill**
+(`.claude/skills/volume-profile/`), mirroring the ICT skill tests. Stdlib-only.
+
+| Test | What it verifies | Why |
+| --- | --- | --- |
+| `test_skill_md_exists` | `SKILL.md` exists. | Without it the folder isn't a loadable skill. |
+| `test_frontmatter_has_name_and_description` | Frontmatter declares `name` and `description`. | These drive skill discovery; a missing key silently breaks loading. |
+| `test_skill_name_is_volume_profile` | `name` is exactly `volume-profile`. | An accidental rename would detach anything referencing the skill. |
+| `test_required_reference_files_exist` | All four `reference/*.md` files are present. | SKILL.md delegates detail to them; a missing one is a dead end. |
+| `test_skill_md_relative_links_resolve` | Every relative link in SKILL.md resolves (incl. the cross-link to the `ict` skill). | Catches typos/renames that break navigation. |
+| `test_reference_files_are_nonempty_and_cite_sources` | Each reference file is substantial and has a `## Sources` section. | Keeps Volume Profile claims auditable and flags botched writes. |
+| `test_key_conventions_documented` | SKILL.md keeps the key conventions (value-area algorithm, `America/New_York`, `footprint`). | These are the rules most likely to cause profile mismatches/wrong levels if dropped. |
+
 ## Adding tests for a new change
 
 1. Get the change validated by the owner (see `AGENTS.md`).
