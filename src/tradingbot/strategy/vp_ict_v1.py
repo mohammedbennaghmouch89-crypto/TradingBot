@@ -52,6 +52,12 @@ class Params:
     # 1m, so these are generous by default; tighten them to trade more selectively.
     sweep_window: int = 60
     entry_window: int = 60
+    # Minimum distance (in ATR) from the POC to the value-area edge being traded.
+    # If the value area is compressed (POC sits right next to VAH/VAL) the edge
+    # trade has almost no room to its POC target, so skip it. 0 disables. Kept
+    # gentle (1.25): on this small sample, win rate improves up to ~1.25 ATR but
+    # larger values overfit (one dropped setup re-routes the sequence badly).
+    min_poc_edge_atr: float = 1.25
 
 
 @dataclass
@@ -213,7 +219,7 @@ def generate_trades(df1: pd.DataFrame, df5: pd.DataFrame, p: Params) -> list[Tra
 
         # ---- setup detection (Volume Profile bias) ----
         c = close[i]
-        new_bias, new_name = _detect_setup(c, prof, naked, tol, p)
+        new_bias, new_name = _detect_setup(c, prof, naked, tol, atr5, p)
         if new_bias != 0:
             setup_bias, setup_name, setup_age = new_bias, new_name, 0
         elif setup_bias != 0:
@@ -261,12 +267,21 @@ def _context_profile(
 
 
 def _detect_setup(
-    c: float, prof: Profile, naked: float | None, tol: float, p: Params
+    c: float, prof: Profile, naked: float | None, tol: float, atr5: float, p: Params
 ) -> tuple[int, str]:
-    """Return (bias, name) if price is within ``tol`` of a key level, else (0,'')."""
-    if abs(c - prof.val) <= tol and c >= prof.val:
+    """Return (bias, name) if price is within ``tol`` of a key level, else (0,'').
+
+    Value-area-edge setups (VAL/VAH) are skipped when the value area is too
+    compressed — i.e. the POC sits closer than ``min_poc_edge_atr`` ATR to the
+    edge being traded — because the edge→POC profit target would then be tiny.
+    Naked-POC setups have no value-area-edge geometry, so the filter ignores them.
+    """
+    min_room = p.min_poc_edge_atr * atr5
+    at_val = abs(c - prof.val) <= tol and c >= prof.val
+    at_vah = abs(c - prof.vah) <= tol and c <= prof.vah
+    if at_val and abs(prof.poc - prof.val) >= min_room:
         return 1, "VAL"
-    if abs(c - prof.vah) <= tol and c <= prof.vah:
+    if at_vah and abs(prof.vah - prof.poc) >= min_room:
         return -1, "VAH"
     if naked is not None and abs(c - naked) <= tol:
         return (1 if c < naked else -1), "nPOC"

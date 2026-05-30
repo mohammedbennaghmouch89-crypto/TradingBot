@@ -63,17 +63,38 @@ def test_detect_setup_bias_rules() -> None:
     These mappings are the core of the mean-reversion setup; if VAL did not map to
     long (or VAH to short) the strategy would fade the wrong way.
     """
-    # Profile from one bar spanning 100..200 -> POC/VAH/VAL all near the middle;
-    # build an explicit one with known geometry instead.
-    highs = np.array([110.0, 150.0, 190.0])
-    lows = np.array([100.0, 140.0, 180.0])
-    vols = np.array([10.0, 50.0, 10.0])
+    # Asymmetric profile so the value area straddles the POC with real room on
+    # both sides: POC=145, VAL=125, VAH=165 (20 pts each side).
+    highs = np.array([110.0, 130.0, 150.0, 170.0, 190.0])
+    lows = np.array([100.0, 120.0, 140.0, 160.0, 180.0])
+    vols = np.array([40.0, 45.0, 100.0, 15.0, 8.0])
     prof = compute_profile(highs, lows, vols, rows=9, va_percent=0.70)
     tol = 1.0
-    long_bias, long_name = _detect_setup(prof.val + 0.5, prof, None, tol, Params())
-    short_bias, short_name = _detect_setup(prof.vah - 0.5, prof, None, tol, Params())
+    atr5 = 1.0  # small ATR so the wide value area passes the POC-edge filter
+    long_bias, long_name = _detect_setup(prof.val + 0.5, prof, None, tol, atr5, Params())
+    short_bias, short_name = _detect_setup(prof.vah - 0.5, prof, None, tol, atr5, Params())
     assert (long_bias, long_name) == (1, "VAL")
     assert (short_bias, short_name) == (-1, "VAH")
+
+
+def test_detect_setup_skips_compressed_value_area() -> None:
+    """A VAL/VAH setup must be rejected when POC sits too close to that edge.
+
+    This is the "don't trade a compressed value area" filter: if the POC→edge
+    distance is below ``min_poc_edge_atr`` ATR, the edge→POC target is too small
+    to be worth taking, so the setup is suppressed. Empirically these narrow-VA
+    trades were the worst performers, so dropping them is the point of the filter.
+    """
+    highs = np.array([110.0, 130.0, 150.0, 170.0, 190.0])
+    lows = np.array([100.0, 120.0, 140.0, 160.0, 180.0])
+    vols = np.array([40.0, 45.0, 100.0, 15.0, 8.0])
+    prof = compute_profile(highs, lows, vols, rows=9, va_percent=0.70)
+    tol = 1.0
+    # POC→VAL distance here is ~20 points; a large ATR makes the required room
+    # (min_poc_edge_atr * atr) exceed it, so the same VAL touch must be skipped.
+    big_atr = abs(prof.poc - prof.val) / Params().min_poc_edge_atr + 1.0
+    bias, name = _detect_setup(prof.val + 0.5, prof, None, tol, big_atr, Params())
+    assert (bias, name) == (0, "")
 
 
 def _synthetic_market(n_days: int = 6, seed: int = 0) -> tuple[pd.DataFrame, pd.DataFrame]:

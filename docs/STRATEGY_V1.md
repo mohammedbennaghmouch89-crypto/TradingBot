@@ -60,8 +60,15 @@ A **setup arms** when price comes within a tolerance (`ATR × tolAtrMult`, defau
 | **Naked POC** | Long/short toward the level | Untested POC acts as a magnet. |
 | **POC** | Context tag only (no edge bias in V1) | Fair value; used for confluence/targets. |
 
-The bias stays active for `setupBars` bars (default 60) — that is the window in
+The bias stays active for `setupBars` bars (default 120) — that is the window in
 which a 1m entry sequence is allowed. If no entry triggers, the setup expires.
+
+**Compressed-value-area filter.** A VAL/VAH setup is **skipped** when the POC sits
+closer than `minPocEdgeAtr` ATR (default 1.25) to the edge being traded — a
+compressed value area leaves almost no room from the edge to the POC target, so
+the trade is not worth taking. (Naked-POC setups have no value-area-edge geometry
+and are unaffected.) On the test window this lifted the win rate from ~44% to
+~47%; note the benefit is mild and larger thresholds overfit this small sample.
 
 > **Regime note (V1 scope).** V1 implements the **mean-reversion / value-edge
 > fade** family (range/rotational behaviour). Trend-day continuation
@@ -131,6 +138,7 @@ swept extreme before the retrace fills, or if the setup window expires.
 | `vpRows` | 24 | Profile resolution (bin height — most impactful VP setting). |
 | `vaPercent` | 0.70 | Value-Area target (0.68 = true 1σ; 0.80 for 80% rule). |
 | `tolAtrMult` | 0.75 | How close to a level arms a setup (ATR-based). |
+| `minPocEdgeAtr` | 1.25 | Skip VAL/VAH setups when POC is closer than this (ATR) to the edge (compressed VA). 0 disables. |
 | `setupBars` | 120 | How long the bias stays active after a touch. |
 | `pivotLen` | 4 | 1m swing lookback (confirms `pivotLen` bars later — repaint lag). Smaller ⇒ more swings ⇒ more sweeps ⇒ more trades. |
 | `useCloseForBreak` | true | MSS needs a body close (vs wick). |

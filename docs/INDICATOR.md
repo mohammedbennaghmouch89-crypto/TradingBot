@@ -73,11 +73,12 @@ range straddles it (`high >= nakedPoc and low <= nakedPoc`) — i.e. once tested
 
 ```
 f_near(level) = |close - level| <= ATR×tolAtrMult
+room(edge)    = |POC - edge| >= ATR×minPocEdgeAtr     (compressed-VA filter)
 
-price near VAL  & close>=VAL  → bias=+1 (long),  level=VAL,  name="VAL"
-price near VAH  & close<=VAH  → bias=-1 (short), level=VAH,  name="VAH"
-price near nPOC (active)      → bias toward it,  name="nPOC"
-price near POC                → name="POC" (context only, bias unchanged)
+price near VAL  & close>=VAL  & room(VAL)  → bias=+1 (long),  level=VAL,  name="VAL"
+price near VAH  & close<=VAH  & room(VAH)  → bias=-1 (short), level=VAH,  name="VAH"
+price near nPOC (active)                   → bias toward it,  name="nPOC"
+price near POC                             → name="POC" (context only, bias unchanged)
 
 setupAge++ each bar; bias cleared when setupAge > setupBars
 setupActive = bias != 0
@@ -119,8 +120,9 @@ See the `INPUTS` block in the `.pine` file; grouped as **Volume Profile**,
 **Setup**, **Entry (ICT)**, and **Visuals**. Every numeric threshold is an input
 because (per both skills) these are conventions to be tuned and backtested, not
 fixed constants. Notable defaults: `vpRows=24`, `vaPercent=0.70`,
-`tolAtrMult=0.75`, `setupBars=120`, `pivotLen=4`, `useCloseForBreak=true`,
-`oteMax=0.5`, `stopBuffAtr=0.1`, `sweepWindow=60`, `entryWindow=60`.
+`tolAtrMult=0.75`, `minPocEdgeAtr=1.25`, `setupBars=120`, `pivotLen=4`,
+`useCloseForBreak=true`, `oteMax=0.5`, `stopBuffAtr=0.1`, `sweepWindow=60`,
+`entryWindow=60`.
 
 ## 8. Outputs
 

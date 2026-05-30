@@ -68,6 +68,7 @@ run on deterministic synthetic data. See `docs/STRATEGY_V1.md`. No network.
 | `test_rolling_swings_confirm_with_lag` | A pivot publishes exactly `pivot_len` bars late. | Enforces the no-lookahead repaint lag shared with Pine. |
 | `test_rth_mask_selects_regular_hours_only` | 09:30–16:00 NY in; overnight/weekend out. | Catches the #1 timezone bug that would corrupt every level. |
 | `test_detect_setup_bias_rules` | VAL→long, VAH→short. | The core mean-reversion mapping; wrong sign fades the wrong way. |
+| `test_detect_setup_skips_compressed_value_area` | A VAL/VAH setup is rejected when POC is too close to that edge. | Guards the compressed-VA filter that drops the lowest-room (worst) edge trades. |
 | `test_generate_trades_runs_and_trades_are_well_formed` | E2E run yields only closed, sign-consistent trades. | Smoke + invariants; catches crashes and state-machine leaks. |
 | `test_no_trades_outside_rth` | No entry falls outside RTH. | Confirms the intraday gate doesn't leak into hours the strategy can't trade. |
 
