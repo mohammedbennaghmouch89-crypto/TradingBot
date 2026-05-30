@@ -135,8 +135,14 @@ single exit target (POC vs opposite VA edge).
 ## 8. Outputs
 
 - **Plots/shapes:** POC/VAH/VAL lines + labels, dashed naked-POC line, histogram
-  boxes, HVN/LVN tags, setup diamonds, ENTRY triangles, and a trade label with
-  entry/stop/targets.
+  boxes, HVN/LVN tags, setup diamonds, ENTRY triangles, the session VWAP line, and
+  a trade label with entry/stop/targets/breakeven.
+- **Trade-result simulation (`showResult`, 1 contract):** the script tracks each
+  entry to its SL/TP (stop-first, with the breakeven move), **colours the exit
+  candle** (green win / red loss / gray breakeven) and prints the **$ result**
+  (`pointValue` $/pt, MNQ = $2). A top-right table shows cumulative **Total P&L,
+  trade count and win rate**. This mirrors the Python backtest's exit logic so the
+  chart and the backtest agree on each trade's outcome.
 - **Alerts:** `alertcondition()` for "setup formed", "long entry", "short entry",
   plus a combined `alert()` emitting a **JSON payload**
   (`{strategy, action, price, stop, tp1, tp2, setup}`) ready for the Phase 2

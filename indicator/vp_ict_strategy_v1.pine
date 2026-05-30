@@ -97,6 +97,13 @@ targetMode = input.string("POC", "Exit target", options=["POC","Opposite VA edge
 breakevenAt = input.float(0.5, "Move SL to breakeven at (frac of target)", minval=0.0, maxval=1.0, step=0.05, group=grpFilt,
      tooltip="When price reaches this fraction of entry->target, move stop to entry. Applied live by the bot; shown as 'BE @' on the entry label. 0 disables.")
 
+// ---- Trade result simulation (1 micro contract) ----
+grpPnl     = "Trade result ($, 1 micro)"
+showResult = input.bool(true, "Mark exit candle + show P&L", group=grpPnl,
+     tooltip="Tracks each entry to its SL/TP, colours the exit candle (green win / red loss / gray breakeven) and prints the $ result for 1 contract.")
+pointValue = input.float(2.0, "Point value ($/point)", minval=0.0, step=0.5, group=grpPnl,
+     tooltip="MNQ (Micro Nasdaq) = $2.00 per index point. MES=$5, MNQ=$2, NQ=$20.")
+
 // ---- Visuals ----
 grpViz     = "Visuals"
 showHisto  = input.bool(true,  "Draw profile histogram", group=grpViz)
@@ -530,6 +537,79 @@ if shortEntry
          "\nSL " + str.tostring(stopPrice, format.mintick) +
          "\nTP " + str.tostring(tp1Price, format.mintick) + " / " + str.tostring(tp2Price, format.mintick) + beTxt,
          style=label.style_label_down, color=color.new(colShort, 75), textcolor=colShort, size=size.small)
+
+// ===================== TRADE RESULT (1 micro contract) ======================
+// Track one open position from entry to its SL/TP, colour the exit candle and
+// print the $ result for 1 contract. Mirrors the backtest: stop checked before
+// target (conservative), optional breakeven move, exit at the chosen target.
+var int    posDir    = 0          // 0 flat, +1 long, -1 short
+var float  posEntry  = na
+var float  posStop   = na
+var float  posTarget = na
+var float  posBE     = na
+var bool   posBEon   = false
+var float  cumPnl    = 0.0
+var int    nWins     = 0
+var int    nTrades   = 0
+
+exitWin  = false
+exitLoss = false
+exitBE   = false
+float tradePnl = na
+
+// Manage an already-open position FIRST (so it can't exit on its own entry bar).
+if posDir != 0
+    if breakevenAt > 0 and not posBEon and ((posDir == 1 and high >= posBE) or (posDir == -1 and low <= posBE))
+        posStop := posEntry
+        posBEon := true
+    if posDir == 1
+        if low <= posStop
+            tradePnl := (posStop - posEntry) * pointValue
+            posDir   := 0
+        else if high >= posTarget
+            tradePnl := (posTarget - posEntry) * pointValue
+            posDir   := 0
+    else
+        if high >= posStop
+            tradePnl := (posStop - posEntry) * pointValue * -1
+            posDir   := 0
+        else if low <= posTarget
+            tradePnl := (posEntry - posTarget) * pointValue
+            posDir   := 0
+    if not na(tradePnl)
+        cumPnl  += tradePnl
+        nTrades += 1
+        exitWin  := tradePnl > 0
+        exitLoss := tradePnl < 0
+        exitBE   := tradePnl == 0
+        nWins := nWins + (exitWin ? 1 : 0)
+
+// Open a new position when an entry fires and we are flat.
+if posDir == 0 and (longEntry or shortEntry)
+    posDir    := longEntry ? 1 : -1
+    posEntry  := entryPrice
+    posStop   := stopPrice
+    posTarget := primaryTarget
+    posBE     := beLevel
+    posBEon   := false
+
+// Colour the exit candle and label the $ result.
+barcolor(showResult and exitWin ? color.lime : showResult and exitLoss ? color.red : showResult and exitBE ? color.gray : na, title="Exit candle")
+if showResult and not na(tradePnl)
+    resTxt = (tradePnl >= 0 ? "+$" : "-$") + str.tostring(math.abs(tradePnl), "#.##")
+    label.new(bar_index, exitWin ? high : low, resTxt,
+         style=exitWin ? label.style_label_down : label.style_label_up,
+         color=exitWin ? color.new(color.green, 30) : exitLoss ? color.new(color.red, 30) : color.new(color.gray, 30),
+         textcolor=color.white, size=size.small)
+
+// Running totals (top-right table).
+var table pnlTable = table.new(position.top_right, 1, 3, border_width=1)
+if showResult and barstate.islast
+    winPct = nTrades > 0 ? 100.0 * nWins / nTrades : 0.0
+    table.cell(pnlTable, 0, 0, "Total P&L: " + (cumPnl >= 0 ? "+$" : "-$") + str.tostring(math.abs(cumPnl), "#.##"),
+         text_color=color.white, bgcolor=cumPnl >= 0 ? color.new(color.green, 20) : color.new(color.red, 20), text_size=size.normal)
+    table.cell(pnlTable, 0, 1, "Trades: " + str.tostring(nTrades), text_color=color.white, bgcolor=color.new(color.gray, 20))
+    table.cell(pnlTable, 0, 2, "Win rate: " + str.tostring(winPct, "#.#") + "%", text_color=color.white, bgcolor=color.new(color.gray, 20))
 
 // ============================ ALERTS =========================================
 alertcondition(newSetup,   title="VP setup formed", message="VP+ICT V1: Volume-Profile SETUP formed")
