@@ -109,11 +109,15 @@ grpViz     = "Visuals"
 showHisto  = input.bool(true,  "Draw profile histogram", group=grpViz)
 showNodes  = input.bool(true,  "Mark HVN / LVN",         group=grpViz)
 showFVG    = input.bool(true,  "Draw entry FVG box",     group=grpViz)
+lblSizeOpt = input.string("normal", "Entry label size", options=["small","normal","large","huge"], group=grpViz)
+lblOffset  = input.int(8, "Entry label offset (bars right)", minval=0, maxval=50, group=grpViz,
+     tooltip="Pushes the entry label to the right of the bar so it does not overlap the FVG box and the ENTRY arrow.")
 colPOC     = input.color(color.new(color.orange, 0),  "POC",  group=grpViz)
 colVA      = input.color(color.new(color.blue,  0),   "VAH/VAL", group=grpViz)
 colHist    = input.color(color.new(color.gray,  70),  "Histogram", group=grpViz)
 colLong    = input.color(color.new(color.teal,  0),   "Long",  group=grpViz)
 colShort   = input.color(color.new(color.red,   0),   "Short", group=grpViz)
+lblSize    = lblSizeOpt == "huge" ? size.huge : lblSizeOpt == "large" ? size.large : lblSizeOpt == "small" ? size.small : size.normal
 
 atr = ta.atr(14)
 tol = atr * tolAtrMult
@@ -516,27 +520,33 @@ plotshape(newSetup and setupBias == 1,  title="Long setup",  style=shape.diamond
 plotshape(newSetup and setupBias == -1, title="Short setup", style=shape.diamond,
      location=location.abovebar, color=colShort, size=size.tiny)
 
-// Entry markers + stop/target labels.
+// Entry markers (arrows). Text lives in the offset label so nothing overlaps.
 plotshape(longEntry,  title="Long entry",  style=shape.triangleup,   location=location.belowbar,
-     color=colLong,  size=size.small, text="ENTRY")
+     color=colLong,  size=size.small)
 plotshape(shortEntry, title="Short entry", style=shape.triangledown, location=location.abovebar,
-     color=colShort, size=size.small, text="ENTRY")
+     color=colShort, size=size.small)
 
 // Working target (bot exit) and the breakeven trigger price shown to the trader.
 primaryTarget = targetMode == "POC" ? tp1Price : tp2Price
 beLevel = entryPrice + (primaryTarget - entryPrice) * breakevenAt
 beTxt = breakevenAt > 0 ? "\nBE @" + str.tostring(beLevel, format.mintick) : ""
 
+// The label is pushed `lblOffset` bars to the right (and a faint connector line
+// is drawn back to the entry bar) so it never sits on top of the FVG box/arrow.
 if longEntry
-    label.new(bar_index, low,  "L @"  + str.tostring(entryPrice, format.mintick) +
+    txt = "LONG @ " + str.tostring(entryPrice, format.mintick) +
          "\nSL " + str.tostring(stopPrice, format.mintick) +
-         "\nTP " + str.tostring(tp1Price, format.mintick) + " / " + str.tostring(tp2Price, format.mintick) + beTxt,
-         style=label.style_label_up, color=color.new(colLong, 75), textcolor=colLong, size=size.small)
+         "\nTP " + str.tostring(tp1Price, format.mintick) + " / " + str.tostring(tp2Price, format.mintick) + beTxt
+    label.new(bar_index + lblOffset, entryPrice, txt, xloc=xloc.bar_index,
+         style=label.style_label_left, color=color.new(colLong, 10), textcolor=color.white, size=lblSize)
+    line.new(bar_index, entryPrice, bar_index + lblOffset, entryPrice, color=color.new(colLong, 40), style=line.style_dotted)
 if shortEntry
-    label.new(bar_index, high, "S @"  + str.tostring(entryPrice, format.mintick) +
+    txt = "SHORT @ " + str.tostring(entryPrice, format.mintick) +
          "\nSL " + str.tostring(stopPrice, format.mintick) +
-         "\nTP " + str.tostring(tp1Price, format.mintick) + " / " + str.tostring(tp2Price, format.mintick) + beTxt,
-         style=label.style_label_down, color=color.new(colShort, 75), textcolor=colShort, size=size.small)
+         "\nTP " + str.tostring(tp1Price, format.mintick) + " / " + str.tostring(tp2Price, format.mintick) + beTxt
+    label.new(bar_index + lblOffset, entryPrice, txt, xloc=xloc.bar_index,
+         style=label.style_label_left, color=color.new(colShort, 10), textcolor=color.white, size=lblSize)
+    line.new(bar_index, entryPrice, bar_index + lblOffset, entryPrice, color=color.new(colShort, 40), style=line.style_dotted)
 
 // ===================== TRADE RESULT (1 micro contract) ======================
 // Track one open position from entry to its SL/TP, colour the exit candle and
@@ -599,8 +609,8 @@ if showResult and not na(tradePnl)
     resTxt = (tradePnl >= 0 ? "+$" : "-$") + str.tostring(math.abs(tradePnl), "#.##")
     label.new(bar_index, exitWin ? high : low, resTxt,
          style=exitWin ? label.style_label_down : label.style_label_up,
-         color=exitWin ? color.new(color.green, 30) : exitLoss ? color.new(color.red, 30) : color.new(color.gray, 30),
-         textcolor=color.white, size=size.small)
+         color=exitWin ? color.new(color.green, 20) : exitLoss ? color.new(color.red, 20) : color.new(color.gray, 20),
+         textcolor=color.white, size=lblSize)
 
 // Running totals (top-right table).
 var table pnlTable = table.new(position.top_right, 1, 3, border_width=1)
