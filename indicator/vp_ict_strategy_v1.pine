@@ -188,9 +188,11 @@ f_buildProfile() =>
     if n > 0
         hi = array.get(sH, 0)
         lo = array.get(sL, 0)
-        for i = 1 to n - 1
-            hi := math.max(hi, array.get(sH, i))
-            lo := math.min(lo, array.get(sL, i))
+        // Guard: Pine `for 1 to n-1` counts DOWN when n==1, so only loop n>1.
+        if n > 1
+            for i = 1 to n - 1
+                hi := math.max(hi, array.get(sH, i))
+                lo := math.min(lo, array.get(sL, i))
         rng = hi - lo
         if rng > 0
             rh = rng / vpRows
