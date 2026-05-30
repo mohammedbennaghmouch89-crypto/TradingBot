@@ -7,15 +7,15 @@
 - **File:** [`indicator/vp_ict_strategy_v1.pine`](../indicator/vp_ict_strategy_v1.pine)
 - **Pine version:** v6.
 - **Type:** `indicator(overlay=true)` — decision support, not a `strategy()`.
-- **Apply it twice:** once on the **5-minute** chart (read the setup/levels), once
+- **Apply it twice:** once on the **3-minute** chart (read the setup/levels), once
   on the **1-minute** chart (take the entry). Same script, same inputs.
 
 ## 1. Why one script on both timeframes
 
 The Volume Profile is anchored to a **session window** (not to the visible
-range). Because both the 5m and 1m charts cover the *same* session bars, they
+range). Because both the 3m and 1m charts cover the *same* session bars, they
 bin the *same* traded volume and produce **aligned POC/VAH/VAL** — so the levels
-you see on the 5m are the levels the 1m entry logic uses. This avoids a
+you see on the 3m are the levels the 1m entry logic uses. This avoids a
 cross-timeframe `request.security` call for levels (a performance + repaint risk
 flagged in `indicator/README.md`).
 
@@ -83,7 +83,12 @@ setupAge++ each bar; bias cleared when setupAge > setupBars
 setupActive = bias != 0
 ```
 
-## 6. Entry state machine (ICT)
+## 6. Entry state machine (ICT) — sequential
+
+ICT is an **ordered** move (sweep → *then* displacement/MSS+FVG → *then*
+retrace), not three conditions on one candle. Both the Pine indicator (`stage`
+0/1/2) and the Python port (`_EntryState`) walk these stages with timeouts, so
+the two agree.
 
 ```
 pivots:  ph = ta.pivothigh(pivotLen,pivotLen);  pl = ta.pivotlow(...)   [lag = pivotLen]
@@ -93,19 +98,20 @@ MSS:     breakUp   = close>lastSwingHigh   (or wick if useCloseForBreak=off)
          breakDown = close<lastSwingLow
 FVG:     bullFvg = low>high[2];   bearFvg = high<low[2]                 (3-candle gap)
 
-ARM (long):  setupActive & bias==+1 & sweptLow  & breakUp   & bullFvg
-ARM (short): setupActive & bias==-1 & sweptHigh & breakDown & bearFvg
-   → store fvgTop/fvgBot, sweptExt; draw FVG box
-
-ENTRY (long):  armed & low  <= fvgBot + (fvgTop-fvgBot)*oteMax
-ENTRY (short): armed & high >= fvgTop - (fvgTop-fvgBot)*oteMax
+stage 0 idle  → 1 swept:   setupActive & bias-aligned sweep   → record sweptExt
+stage 1 swept → 2 armed:   within sweepWindow, MSS & FVG      → store fvgTop/fvgBot, draw box
+                           (abandon if stageAge>sweepWindow or bias flips)
+stage 2 armed → ENTRY:     within entryWindow, retrace into FVG to oteMax
+   long:  low  <= fvgBot + (fvgTop-fvgBot)*oteMax
+   short: high >= fvgTop - (fvgTop-fvgBot)*oteMax
    → entry=retrace level; stop=sweptExt ∓ ATR×stopBuffAtr; tp1=POC; tp2=opposite VA edge
 
-INVALIDATE: close beyond sweptExt before fill, or setup expires → armed=false
+INVALIDATE: close beyond sweptExt before fill, stage times out, or setup expires → stage:=0
 ```
 
-The arm-then-trigger split is what makes the entry **retrace-based** (you do not
-enter on the displacement candle itself, you wait for the pullback into the gap).
+The staged sweep→arm→trigger flow is what makes the entry **retrace-based** and
+**sequential**: you do not enter on the displacement candle itself, you wait for
+the pullback into the gap, and each stage has its own timeout.
 
 ## 7. Inputs reference
 
@@ -113,8 +119,8 @@ See the `INPUTS` block in the `.pine` file; grouped as **Volume Profile**,
 **Setup**, **Entry (ICT)**, and **Visuals**. Every numeric threshold is an input
 because (per both skills) these are conventions to be tuned and backtested, not
 fixed constants. Notable defaults: `vpRows=24`, `vaPercent=0.70`,
-`tolAtrMult=0.25`, `setupBars=20`, `pivotLen=5`, `useCloseForBreak=true`,
-`oteMax=0.5`, `stopBuffAtr=0.1`.
+`tolAtrMult=0.5`, `setupBars=120`, `pivotLen=5`, `useCloseForBreak=true`,
+`oteMax=0.5`, `stopBuffAtr=0.1`, `sweepWindow=40`, `entryWindow=40`.
 
 ## 8. Outputs
 

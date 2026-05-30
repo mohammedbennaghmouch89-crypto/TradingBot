@@ -5,21 +5,23 @@
 //  WHAT IT DOES
 //  ------------
 //  Implements the project's "Strategy V1" in a single indicator that you apply
-//  to BOTH the 5-minute and the 1-minute chart of the same symbol:
+//  to BOTH the context chart (3-minute, default) and the 1-minute chart of the
+//  same symbol:
 //
-//    1. CONTEXT / SETUP  (Volume Profile, read on the 5-minute chart)
+//    1. CONTEXT / SETUP  (Volume Profile, read on the 3-minute chart)
 //       Builds a session-anchored Volume Profile (POC, Value Area VAH/VAL,
 //       HVN/LVN, prior-session "naked" POC) and flags a SETUP when price
 //       reaches a key value-area edge with a directional bias.
 //
 //    2. ENTRY  (ICT, executed on the 1-minute chart)
-//       While a SETUP bias is active and price sits at the 5m level, it runs the
-//       ICT entry backbone on the 1m: liquidity sweep -> market-structure shift
-//       with displacement (FVG) -> entry on the retrace into the FVG, gated by
-//       premium/discount. It prints an ENTRY arrow with a stop and two targets.
+//       While a SETUP bias is active and price sits at the 3m level, it runs the
+//       ICT entry backbone on the 1m as an ORDERED SEQUENCE: liquidity sweep ->
+//       (within sweepWindow) market-structure shift with displacement (FVG) ->
+//       (within entryWindow) entry on the retrace into the FVG. It prints an
+//       ENTRY arrow with a stop and two targets.
 //
 //  The Volume Profile is anchored to a *session window* (RTH by default, New York
-//  time), so the SAME price action is binned on the 5m and the 1m chart and the
+//  time), so the SAME price action is binned on the 3m and the 1m chart and the
 //  POC/VAH/VAL line up across the two timeframes — no cross-timeframe
 //  `request.security` needed for the levels. You literally apply this one script
 //  to both charts and get the two-step workflow.
@@ -44,7 +46,7 @@ indicator("VP + ICT Strategy V1", shorttitle="VP+ICT V1", overlay=true,
 // ============================ INPUTS =========================================
 
 // ---- Volume Profile ----
-grpVP      = "Volume Profile (5m context)"
+grpVP      = "Volume Profile (3m context)"
 vpSession  = input.session("0930-1600", "Session window",            group=grpVP,
      tooltip="The profile is built only from bars inside this window (RTH default).")
 vpTz       = input.string("America/New_York", "Session timezone",    group=grpVP)
@@ -62,10 +64,10 @@ grpSet     = "Setup (Volume Profile)"
 useVAedges = input.bool(true,  "Setup at VAH / VAL", group=grpSet)
 usePOC     = input.bool(true,  "Setup at POC",       group=grpSet)
 useNPOC    = input.bool(true,  "Setup at naked POC", group=grpSet)
-tolAtrMult = input.float(0.25, "Proximity tolerance (x ATR)", minval=0.05, maxval=2.0, step=0.05, group=grpSet,
+tolAtrMult = input.float(0.5, "Proximity tolerance (x ATR)", minval=0.05, maxval=2.0, step=0.05, group=grpSet,
      tooltip="How close price must get to a level to arm a setup. ATR-based for cross-instrument robustness.")
-setupBars  = input.int(20, "Setup stays armed for N bars", minval=3, maxval=200, group=grpSet,
-     tooltip="After a level is touched, the ICT entry window stays open this many bars.")
+setupBars  = input.int(120, "Setup stays active for N bars", minval=3, maxval=400, group=grpSet,
+     tooltip="After a level is touched, the ICT entry sequence stays valid this many bars.")
 
 // ---- Entry (ICT) ----
 grpICT     = "Entry (ICT, 1m)"
@@ -76,6 +78,10 @@ useCloseBreak = input.bool(true, "Structure break needs body CLOSE", group=grpIC
 oteMax     = input.float(0.5, "Max retrace into FVG for entry (0..1)", minval=0.1, maxval=1.0, step=0.05, group=grpICT,
      tooltip="Enter only when price retraces at least to this fraction of the FVG (0.5 = consequent encroachment).")
 stopBuffAtr = input.float(0.1, "Stop buffer beyond swept extreme (x ATR)", minval=0.0, maxval=1.0, step=0.05, group=grpICT)
+sweepWindow = input.int(40, "Bars after sweep to find MSS+FVG", minval=1, maxval=200, group=grpICT,
+     tooltip="The sequence sweep -> MSS+FVG must complete within this many bars.")
+entryWindow = input.int(40, "Bars after FVG to find retrace entry", minval=1, maxval=200, group=grpICT,
+     tooltip="After the FVG arms, the retrace entry must occur within this many bars.")
 
 // ---- Visuals ----
 grpViz     = "Visuals"
@@ -94,7 +100,7 @@ tol = atr * tolAtrMult
 // ====================== SESSION-ANCHORED PROFILE =============================
 // We keep this session's bar highs/lows/volumes in arrays and rebuild the
 // histogram each confirmed bar over [sessionLow, sessionHigh]. The session is
-// small (RTH 5m ~ 78 bars, 1m ~ 390 bars), so the O(bars x rows) rebuild is cheap.
+// small (RTH 3m ~ 130 bars, 1m ~ 390 bars), so the O(bars x rows) rebuild is cheap.
 
 var float[] sH = array.new_float()
 var float[] sL = array.new_float()
@@ -274,34 +280,18 @@ fvgBotBear = high
 breakUp   = not na(lastSwingHigh) and (useCloseBreak ? close > lastSwingHigh : high > lastSwingHigh)
 breakDown = not na(lastSwingLow)  and (useCloseBreak ? close < lastSwingLow  : low  < lastSwingLow)
 
-// State machine: once a sweep+MSS+FVG aligns with the setup bias, "arm" an FVG
-// zone, then fire the ENTRY when price retraces into it (>= oteMax of the gap).
-var bool  armed     = false
-var float fvgTop    = na
-var float fvgBot    = na
-var float sweptExt  = na
-var box   fvgBox    = na
+// Sequential state machine (matches src/tradingbot/strategy/vp_ict_v1.py):
+//   stage 0 idle  -> 1 swept -> 2 armed -> entry
+// ICT is an ORDERED move (sweep first, THEN displacement/MSS+FVG, THEN retrace),
+// not three conditions on one candle, so we walk the stages with timeouts.
+var int   stage    = 0
+var int   stageDir = 0     // +1 long, -1 short
+var int   stageAge = 0
+var float fvgTop   = na
+var float fvgBot   = na
+var float sweptExt = na
+var box   fvgBox   = na
 
-// Arm long
-if setupActive and setupBias == 1 and sweptLow and breakUp and bullFvg and not armed
-    armed    := true
-    fvgTop   := fvgTopBull
-    fvgBot   := fvgBotBull
-    sweptExt := low                       // the swept low we will hide the stop under
-    if showFVG
-        fvgBox := box.new(bar_index, fvgTop, bar_index + 5, fvgBot,
-             border_color=colLong, bgcolor=color.new(colLong, 85))
-// Arm short
-if setupActive and setupBias == -1 and sweptHigh and breakDown and bearFvg and not armed
-    armed    := true
-    fvgTop   := fvgTopBear
-    fvgBot   := fvgBotBear
-    sweptExt := high
-    if showFVG
-        fvgBox := box.new(bar_index, fvgTop, bar_index + 5, fvgBot,
-             border_color=colShort, bgcolor=color.new(colShort, 85))
-
-// Entry trigger: price retraces into the armed FVG at/below the OTE threshold.
 longEntry  = false
 shortEntry = false
 var float entryPrice = na
@@ -309,33 +299,72 @@ var float stopPrice  = na
 var float tp1Price   = na
 var float tp2Price   = na
 
-if armed and setupBias == 1
-    fvgMid = fvgBot + (fvgTop - fvgBot) * oteMax     // retrace level (0.5 = CE)
-    if low <= fvgMid
-        longEntry  := true
-        entryPrice := fvgMid
-        stopPrice  := sweptExt - atr * stopBuffAtr
-        tp1Price   := na(poc) ? vah : poc            // target 1: back to fair value
-        tp2Price   := vah                            // target 2: opposite VA edge
-        armed      := false
-    else if not na(sweptExt) and close < sweptExt    // setup invalidated
-        armed := false
+stageAge += 1
 
-if armed and setupBias == -1
-    fvgMid = fvgTop - (fvgTop - fvgBot) * oteMax
-    if high >= fvgMid
-        shortEntry := true
-        entryPrice := fvgMid
-        stopPrice  := sweptExt + atr * stopBuffAtr
-        tp1Price   := na(poc) ? val : poc
-        tp2Price   := val
-        armed      := false
-    else if not na(sweptExt) and close > sweptExt
-        armed := false
+// Stage 0 -> 1: a liquidity sweep in the bias direction starts the sequence.
+if stage == 0 and setupActive
+    if setupBias == 1 and sweptLow
+        stage    := 1
+        stageDir := 1
+        stageAge := 0
+        sweptExt := low
+    else if setupBias == -1 and sweptHigh
+        stage    := 1
+        stageDir := -1
+        stageAge := 0
+        sweptExt := high
 
-// Reset the arm state if the whole setup expired.
+// Stage 1 -> 2: within sweepWindow, an MSS+FVG arms the entry zone.
+else if stage == 1
+    if stageAge > sweepWindow or stageDir != setupBias
+        stage := 0
+    else if stageDir == 1 and breakUp and bullFvg
+        stage    := 2
+        stageAge := 0
+        fvgTop   := fvgTopBull
+        fvgBot   := fvgBotBull
+        if showFVG
+            fvgBox := box.new(bar_index, fvgTop, bar_index + 5, fvgBot,
+                 border_color=colLong, bgcolor=color.new(colLong, 85))
+    else if stageDir == -1 and breakDown and bearFvg
+        stage    := 2
+        stageAge := 0
+        fvgTop   := fvgTopBear
+        fvgBot   := fvgBotBear
+        if showFVG
+            fvgBox := box.new(bar_index, fvgTop, bar_index + 5, fvgBot,
+                 border_color=colShort, bgcolor=color.new(colShort, 85))
+
+// Stage 2 -> entry: within entryWindow, a retrace into the FVG fires the trade.
+else if stage == 2
+    if stageAge > entryWindow
+        stage := 0
+    else if stageDir == 1
+        fvgMid = fvgBot + (fvgTop - fvgBot) * oteMax   // 0.5 = consequent encroachment
+        if low <= fvgMid
+            longEntry  := true
+            entryPrice := fvgMid
+            stopPrice  := sweptExt - atr * stopBuffAtr
+            tp1Price   := na(poc) ? vah : poc          // target 1: fair value (POC)
+            tp2Price   := vah                          // target 2: opposite VA edge
+            stage      := 0
+        else if not na(sweptExt) and close < sweptExt  // invalidated
+            stage := 0
+    else if stageDir == -1
+        fvgMid = fvgTop - (fvgTop - fvgBot) * oteMax
+        if high >= fvgMid
+            shortEntry := true
+            entryPrice := fvgMid
+            stopPrice  := sweptExt + atr * stopBuffAtr
+            tp1Price   := na(poc) ? val : poc
+            tp2Price   := val
+            stage      := 0
+        else if not na(sweptExt) and close > sweptExt
+            stage := 0
+
+// Reset the sequence if the whole setup expired.
 if not setupActive
-    armed := false
+    stage := 0
 
 // ============================ DRAWING ========================================
 // Profile lines + labels are (re)drawn on the last bar so historical bars stay

@@ -25,6 +25,11 @@ dev = [
     "ruff>=0.5",
     "mypy>=1.10",
 ]
+# Extra deps for the offline MNQ backtest + charts (scripts/backtest_mnq.py).
+backtest = [
+    "yfinance>=0.2",
+    "matplotlib>=3.8",
+]
 
 [project.scripts]
 tradingbot = "tradingbot.cli:main"
@@ -47,6 +52,11 @@ packages = ["tradingbot"]
 mypy_path = "src"
 strict = true
 warn_unused_configs = true
+
+# Third-party libs without type stubs we depend on; don't fail strict on them.
+[[tool.mypy.overrides]]
+module = ["pandas", "yfinance"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 minversion = "8.0"

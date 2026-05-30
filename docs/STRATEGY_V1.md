@@ -1,4 +1,8 @@
-# Strategy V1 — Volume Profile setup (5m) → ICT entry (1m)
+# Strategy V1 — Volume Profile setup (3m) → ICT entry (1m)
+
+> **Context timeframe:** the setup runs on a **3-minute** profile by default
+> (chosen for a finer profile and more frequent setups than 5m). It is
+> configurable; everywhere below "the context chart" means the 3m chart.
 
 > Status: **draft for owner validation.** Per `AGENTS.md` this is presented for
 > review before any commit/tests. The mechanics below mirror
@@ -6,14 +10,14 @@
 
 ## 1. The idea in one paragraph
 
-Strategy V1 is a **top-down, two-timeframe** method. The **5-minute** chart is
+Strategy V1 is a **top-down, two-timeframe** method. The **3-minute** chart is
 used for **context**: a session Volume Profile tells us *where value is* and
 which price levels institutions defend (POC, Value-Area edges, untested "naked"
 POC). When price reaches one of those levels we have a **setup** and a
 directional **bias**. We then drop to the **1-minute** chart to **time the
 entry** with ICT price action — we wait for a **liquidity sweep**, a
 **market-structure shift with displacement** (which leaves a Fair Value Gap),
-and we enter on the **retrace into that gap**, in the direction of the 5m bias.
+and we enter on the **retrace into that gap**, in the direction of the 3m bias.
 Volume Profile answers *where* and *which way*; ICT answers *exactly when*.
 
 This pairs the two expert skills already in the repo
@@ -23,7 +27,7 @@ institutional zones from two angles, so an entry is only taken where they agree.
 
 ## 2. Why these two tools combine well
 
-| Volume Profile (5m, "where") | ICT (1m, "when") |
+| Volume Profile (3m, "where") | ICT (1m, "when") |
 | --- | --- |
 | POC / HVN = acceptance, heavy trade | Order block (institutional zone) |
 | LVN / single print = inefficiency | Fair Value Gap (imbalance to be filled) |
@@ -34,9 +38,9 @@ The high-conviction play both skills point to is identical: **a liquidity sweep
 at/near a Value-Area edge or POC, followed by a displacement/FVG back toward
 value.** That is exactly what V1 automates.
 
-## 3. Step 1 — The setup (5-minute Volume Profile)
+## 3. Step 1 — The setup (3-minute Volume Profile)
 
-On the 5m chart the indicator builds a **session-anchored** Volume Profile
+On the 3m chart the indicator builds a **session-anchored** Volume Profile
 (default RTH `09:30–16:00`, `America/New_York`) and derives:
 
 - **POC** — highest-volume price row (fair value / magnet).
@@ -56,8 +60,8 @@ A **setup arms** when price comes within a tolerance (`ATR × tolAtrMult`, defau
 | **Naked POC** | Long/short toward the level | Untested POC acts as a magnet. |
 | **POC** | Context tag only (no edge bias in V1) | Fair value; used for confluence/targets. |
 
-The bias stays "armed" for `setupBars` bars (default 20) — that is the window in
-which a 1m entry is allowed. If no entry triggers, the setup expires.
+The bias stays active for `setupBars` bars (default 60) — that is the window in
+which a 1m entry sequence is allowed. If no entry triggers, the setup expires.
 
 > **Regime note (V1 scope).** V1 implements the **mean-reversion / value-edge
 > fade** family (range/rotational behaviour). Trend-day continuation
@@ -66,20 +70,32 @@ which a 1m entry is allowed. If no entry triggers, the setup expires.
 
 ## 4. Step 2 — The entry (1-minute ICT)
 
-While a 5m bias is armed and price sits at the level, the 1m logic runs the ICT
-backbone. **All four gates must align**, in the bias direction:
+While a 3m bias is armed and price sits at the level, the 1m logic runs the ICT
+backbone. These four gates fire **in sequence** (not on one candle — ICT
+describes an ordered manipulation→shift→entry move), in the bias direction:
 
 1. **Liquidity sweep** — a wick beyond the most recent 1m swing that **closes
    back inside** (a stop raid; long needs a swept *low*, short a swept *high*).
-2. **Market-structure shift (MSS)** — a candle **close** beyond the opposing
-   minor swing (ICT-standard; a wick-only break is configurable via
-   `useCloseForBreak`).
-3. **Displacement → Fair Value Gap** — the breaking move is strong enough to
-   leave a 3-candle FVG (the only non-arbitrary displacement test). The FVG is
-   the entry zone.
-4. **Entry on the retrace** — price pulls back **into the FVG** to at least the
-   `oteMax` fraction (default 0.5 = "consequent encroachment", the 50% of the
-   gap). That fill is the entry.
+   This *starts* the sequence and records the swept extreme.
+2. **Market-structure shift (MSS)** — within `sweep_window` bars of the sweep, a
+   candle **close** beyond the opposing minor swing (ICT-standard; a wick-only
+   break is configurable via `useCloseForBreak`)…
+3. **…with displacement → Fair Value Gap** — that same break leaves a 3-candle
+   FVG (the only non-arbitrary displacement test). The FVG becomes the entry
+   zone (the setup is now "armed").
+4. **Entry on the retrace** — within `entry_window` bars, price pulls back
+   **into the FVG** to at least the `oteMax` fraction (default 0.5 = "consequent
+   encroachment", the 50% of the gap). That fill is the entry.
+
+Each stage ages out independently (`sweep_window`, then `entry_window`), so a
+sweep that never produces a displacement, or an armed FVG that never gets
+retraced, is abandoned rather than left hanging.
+
+> **Implementation parity.** Both the Pine indicator
+> (`indicator/vp_ict_strategy_v1.pine`) and the Python backtest
+> (`src/tradingbot/strategy/vp_ict_v1.py`) implement this as the **same
+> sequential** state machine (`idle → swept → armed → entry`), so the chart and
+> the bot agree. See [`docs/BACKTEST.md`](BACKTEST.md).
 
 ### Trade management (printed on the entry)
 
@@ -94,7 +110,7 @@ swept extreme before the retrace fills, or if the setup window expires.
 
 ## 5. End-to-end example (long)
 
-1. **5m:** price sells off into **VAL** within 0.25 ATR → **long bias armed**,
+1. **3m:** price sells off into **VAL** within tolerance → **long bias armed**,
    "VAL" diamond prints below the bar.
 2. **1m:** price wicks below a minor swing low and closes back above it →
    **sweep**. The next candle closes above the prior minor swing high → **MSS**,
@@ -111,9 +127,11 @@ swept extreme before the retrace fills, or if the setup window expires.
 | `vpRows` | 24 | Profile resolution (bin height — most impactful VP setting). |
 | `vaPercent` | 0.70 | Value-Area target (0.68 = true 1σ; 0.80 for 80% rule). |
 | `tolAtrMult` | 0.25 | How close to a level arms a setup (ATR-based). |
-| `setupBars` | 20 | How long the entry window stays open after a touch. |
+| `setupBars` | 60 | How long the bias stays active after a touch. |
 | `pivotLen` | 5 | 1m swing lookback (confirms `pivotLen` bars later — repaint lag). |
 | `useCloseForBreak` | true | MSS needs a body close (vs wick). |
+| `sweep_window` | 20 | Bars after a sweep to still accept the MSS+FVG (Python). |
+| `entry_window` | 20 | Bars after arming the FVG to still accept the retrace (Python). |
 | `oteMax` | 0.5 | Required retrace into the FVG before entering. |
 | `stopBuffAtr` | 0.1 | Stop buffer beyond the swept extreme. |
 
@@ -128,7 +146,7 @@ this) — they exist to be tuned and, in Phase 2, backtested.
 - **Pivots lag.** 1m swings confirm `pivotLen` bars after the fact; the indicator
   never acts on an unconfirmed pivot, but this means entries are detected with
   that inherent delay (documented, not a bug).
-- **Single-symbol, single timeframe per chart.** You apply the script to the 5m
+- **Single-symbol, single timeframe per chart.** You apply the script to the 3m
   chart for context and to the 1m chart for entries; the session anchor keeps the
   POC/VA aligned between them without cross-timeframe `request.security`.
 - **V1 is mean-reversion only.** Trend-day continuation, SMT divergence, killzone
@@ -138,7 +156,7 @@ this) — they exist to be tuned and, in Phase 2, backtested.
 
 ## 8. How we validate it (ties into `docs/TESTING.md`)
 
-1. **Visual, 5m:** confirm POC/VAH/VAL match TradingView's native Volume Profile
+1. **Visual, 3m:** confirm POC/VAH/VAL match TradingView's native Volume Profile
    on the same session; check the Data Window values.
 2. **Visual, 1m:** step through **Bar Replay** and confirm sweep→MSS→FVG→entry
    fires on the right candles and does **not repaint** past entries.

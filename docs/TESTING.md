@@ -21,7 +21,9 @@ targeting `develop` or `main`. A PR is mergeable only when CI is green.
 - **Every test has a docstring** stating *what* it verifies and *why* it
   matters.
 - Tests must be deterministic and must not hit the network or a real exchange.
-  Exchange interactions are mocked/stubbed.
+  Exchange interactions are mocked/stubbed; the MNQ backtest tests use synthetic
+  or hand-built data, never the live `yfinance` feed (the `backtest` extra is not
+  required to run the suite).
 - Indicator tests (added in Phase 1/2) must also include at least one
   correctness check against known values and, where relevant, a guard that the
   computation stays vectorized/fast.
@@ -40,6 +42,34 @@ trading logic exists.
 | `test_settings_read_from_environment` | Env vars override settings (`TRADING_SYMBOL`, `DRY_RUN`). | Confirms pydantic-settings wiring so deployments configure via env. |
 | `test_cli_version_flag_exits_zero` | `--version` triggers `SystemExit(0)`. | A broken entry point would exit non-zero. |
 | `test_cli_main_runs_without_args` | `main([])` returns exit code 0. | Ensures the default run path is wired and side-effect free. |
+
+### `tests/test_backtest.py`
+
+Arithmetic tests for the **MNQ portfolio backtest** (`src/tradingbot/backtest.py`)
+— the contract economics that turn Strategy V1 trades into a dollar P&L. See
+`docs/BACKTEST.md`. Stdlib + pandas/numpy only (no network).
+
+| Test | What it verifies | Why |
+| --- | --- | --- |
+| `test_point_value_and_balance_long_win` | A +20-pt long adds 20×$2 − commission. | Pins the $2/point MNQ economics and fee deduction behind every reported balance. |
+| `test_short_trade_pnl_sign` | A short closing lower is a profit. | Guards the direction sign so shorts aren't inverted. |
+| `test_win_rate_and_counts` | Win rate counts only trades that beat commission. | Fixes the headline metric's definition (net of fees). |
+| `test_max_drawdown_is_peak_to_trough` | Drawdown tracks the running peak. | The key risk number must be peak-to-trough, not start-to-end. |
+| `test_empty_trades_returns_starting_balance` | No trades leaves balance/​drawdown untouched. | A no-signal period must not crash or invent P&L. |
+
+### `tests/test_vp_ict_strategy.py`
+
+Tests for the **Strategy V1 engine** (`src/tradingbot/strategy/vp_ict_v1.py`):
+the swing/pivot lag, the RTH session mask, setup-bias rules, and an end-to-end
+run on deterministic synthetic data. See `docs/STRATEGY_V1.md`. No network.
+
+| Test | What it verifies | Why |
+| --- | --- | --- |
+| `test_rolling_swings_confirm_with_lag` | A pivot publishes exactly `pivot_len` bars late. | Enforces the no-lookahead repaint lag shared with Pine. |
+| `test_rth_mask_selects_regular_hours_only` | 09:30–16:00 NY in; overnight/weekend out. | Catches the #1 timezone bug that would corrupt every level. |
+| `test_detect_setup_bias_rules` | VAL→long, VAH→short. | The core mean-reversion mapping; wrong sign fades the wrong way. |
+| `test_generate_trades_runs_and_trades_are_well_formed` | E2E run yields only closed, sign-consistent trades. | Smoke + invariants; catches crashes and state-machine leaks. |
+| `test_no_trades_outside_rth` | No entry falls outside RTH. | Confirms the intraday gate doesn't leak into hours the strategy can't trade. |
 
 ### `tests/test_volume_profile.py`
 

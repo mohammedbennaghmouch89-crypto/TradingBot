@@ -35,6 +35,8 @@ coverage.xml
 /logs/
 *.csv
 *.parquet
+/data_cache/
+/reports/
 
 # Editors / OS
 .idea/
