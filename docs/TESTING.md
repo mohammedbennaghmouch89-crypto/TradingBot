@@ -41,6 +41,25 @@ trading logic exists.
 | `test_cli_version_flag_exits_zero` | `--version` triggers `SystemExit(0)`. | A broken entry point would exit non-zero. |
 | `test_cli_main_runs_without_args` | `main([])` returns exit code 0. | Ensures the default run path is wired and side-effect free. |
 
+### `tests/test_volume_profile.py`
+
+Correctness tests for the **Volume Profile core**
+(`src/tradingbot/indicators/volume_profile.py`) — the parity-critical math shared
+by the Phase 1 Pine indicator (`indicator/vp_ict_strategy_v1.pine`) and the
+Phase 2 bot. See `docs/STRATEGY_V1.md` / `docs/INDICATOR.md`.
+
+| Test | What it verifies | Why |
+| --- | --- | --- |
+| `test_poc_is_highest_volume_row` | POC lands on the heaviest-volume row. | POC anchors VAH/VAL and all trade targets; a wrong POC breaks the whole strategy. |
+| `test_bins_conserve_total_volume` | The histogram redistributes volume without creating/destroying it. | Conservation catches off-by-one row-span bugs in the OHLCV approximation. |
+| `test_value_area_simple_known_case` | Value area matches a hand-computed expansion. | Pins the canonical two-rows-per-side 70% algorithm to a known result. |
+| `test_value_area_tie_breaks_upward` | An exact above/below tie expands upward. | Locks the TradingView upper-row tie-break for reproducible levels. |
+| `test_value_area_spans_everything_at_100_percent` | A 100% target includes every row. | Guards loop termination (no early stop, no infinite loop). |
+| `test_degenerate_single_price_session` | Zero price range collapses to row 0, no divide-by-zero. | Real edge case for halted/illiquid bars. |
+| `test_empty_input_returns_zero_bins` | No bars yields an all-zero histogram. | Lets callers treat "no levels yet" uniformly before a session has data. |
+| `test_mismatched_lengths_raise` | Unequal OHLCV lengths raise. | Fails fast instead of silently misaligning bars into a corrupt profile. |
+| `test_build_bins_matches_naive_loop_reference` | Vectorized binning equals a scalar per-bar reference. | Ensures the AGENTS-mandated vectorization can't drift from correctness. |
+
 ### `tests/test_ict_skill.py`
 
 Structural-integrity tests for the **ICT skill** (`.claude/skills/ict/`). The skill

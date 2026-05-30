@@ -6,7 +6,7 @@
 
 ### Phase 1 — Indicator (Pine Script)
 
-The signal logic is first authored as a **Pine Script v5** indicator in
+The signal logic is first authored as a **Pine Script v6** indicator in
 `indicator/`, validated visually inside TradingView. This is the source of
 truth for the trading logic.
 

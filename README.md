@@ -15,7 +15,7 @@ A two-phase project:
 
 | Area | Choice | Why |
 | --- | --- | --- |
-| Indicator | **Pine Script v5** | Native TradingView language. |
+| Indicator | **Pine Script v6** | Native TradingView language. |
 | Bot language | **Python 3.11+** | Best ecosystem for market data, indicators and exchange APIs. |
 | Market data / exchange | **ccxt** | Unified API across many crypto exchanges. |
 | Numerics | **NumPy + pandas** | Fast, vectorized indicator math (performance requirement). |

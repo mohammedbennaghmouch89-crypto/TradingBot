@@ -1,0 +1,464 @@
+//@version=6
+// =============================================================================
+//  VP + ICT Strategy V1   —   TradingBot Phase 1 indicator
+// -----------------------------------------------------------------------------
+//  WHAT IT DOES
+//  ------------
+//  Implements the project's "Strategy V1" in a single indicator that you apply
+//  to BOTH the 5-minute and the 1-minute chart of the same symbol:
+//
+//    1. CONTEXT / SETUP  (Volume Profile, read on the 5-minute chart)
+//       Builds a session-anchored Volume Profile (POC, Value Area VAH/VAL,
+//       HVN/LVN, prior-session "naked" POC) and flags a SETUP when price
+//       reaches a key value-area edge with a directional bias.
+//
+//    2. ENTRY  (ICT, executed on the 1-minute chart)
+//       While a SETUP bias is active and price sits at the 5m level, it runs the
+//       ICT entry backbone on the 1m: liquidity sweep -> market-structure shift
+//       with displacement (FVG) -> entry on the retrace into the FVG, gated by
+//       premium/discount. It prints an ENTRY arrow with a stop and two targets.
+//
+//  The Volume Profile is anchored to a *session window* (RTH by default, New York
+//  time), so the SAME price action is binned on the 5m and the 1m chart and the
+//  POC/VAH/VAL line up across the two timeframes — no cross-timeframe
+//  `request.security` needed for the levels. You literally apply this one script
+//  to both charts and get the two-step workflow.
+//
+//  IMPORTANT — this is a DECISION-SUPPORT indicator, not an auto-trader. It marks
+//  setups/entries and fires alerts; the bot (Phase 2) is what would act on them.
+//
+//  CONVENTIONS (see docs/INDICATOR.md and the volume-profile / ict skills):
+//   - Volume-at-price is APPROXIMATED from OHLCV by distributing each bar's
+//     volume uniformly across its high-low range (no tick data on the chart).
+//   - Value Area uses the canonical 70% / two-rows-per-side / tie-break-upper algo.
+//   - ICT: structure break = body CLOSE beyond a swing; sweep = WICK beyond that
+//     closes back inside. Pivots confirm `len` bars later (documented repaint lag).
+//   - All session/time logic is in "America/New_York"; never a hardcoded offset.
+//
+//  Every threshold below is an input so it can be tuned and (Phase 2) backtested.
+// =============================================================================
+
+indicator("VP + ICT Strategy V1", shorttitle="VP+ICT V1", overlay=true,
+     max_lines_count=500, max_labels_count=500, max_boxes_count=500)
+
+// ============================ INPUTS =========================================
+
+// ---- Volume Profile ----
+grpVP      = "Volume Profile (5m context)"
+vpSession  = input.session("0930-1600", "Session window",            group=grpVP,
+     tooltip="The profile is built only from bars inside this window (RTH default).")
+vpTz       = input.string("America/New_York", "Session timezone",    group=grpVP)
+vpRows     = input.int(24, "Profile rows", minval=8, maxval=100,     group=grpVP,
+     tooltip="Row count = bin height. The single most outcome-changing VP setting.")
+vaPercent  = input.float(0.70, "Value Area %", minval=0.5, maxval=0.95, step=0.01, group=grpVP,
+     tooltip="0.70 convention (~1 sigma). 0.68 = true 1 sigma; 0.80 for the 80% rule.")
+nodeWin    = input.int(2, "HVN/LVN window (rows each side)", minval=1, maxval=5, group=grpVP)
+lvnFactor  = input.float(0.6, "LVN max vs neighbours", minval=0.1, maxval=1.0, step=0.05, group=grpVP,
+     tooltip="A row is an LVN if it is a local valley AND below this fraction of its neighbours' avg.")
+hvnFactor  = input.float(1.4, "HVN min vs neighbours", minval=1.0, maxval=3.0, step=0.05, group=grpVP)
+
+// ---- Setup (which levels, how close) ----
+grpSet     = "Setup (Volume Profile)"
+useVAedges = input.bool(true,  "Setup at VAH / VAL", group=grpSet)
+usePOC     = input.bool(true,  "Setup at POC",       group=grpSet)
+useNPOC    = input.bool(true,  "Setup at naked POC", group=grpSet)
+tolAtrMult = input.float(0.25, "Proximity tolerance (x ATR)", minval=0.05, maxval=2.0, step=0.05, group=grpSet,
+     tooltip="How close price must get to a level to arm a setup. ATR-based for cross-instrument robustness.")
+setupBars  = input.int(20, "Setup stays armed for N bars", minval=3, maxval=200, group=grpSet,
+     tooltip="After a level is touched, the ICT entry window stays open this many bars.")
+
+// ---- Entry (ICT) ----
+grpICT     = "Entry (ICT, 1m)"
+pivotLen   = input.int(5, "Swing lookback (internal pivots)", minval=2, maxval=25, group=grpICT,
+     tooltip="ta.pivothigh/low length. Pivots confirm this many bars later (repaint lag).")
+useCloseBreak = input.bool(true, "Structure break needs body CLOSE", group=grpICT,
+     tooltip="ON = ICT-standard close beyond swing. OFF = wick allowed (LuxAlgo-style).")
+oteMax     = input.float(0.5, "Max retrace into FVG for entry (0..1)", minval=0.1, maxval=1.0, step=0.05, group=grpICT,
+     tooltip="Enter only when price retraces at least to this fraction of the FVG (0.5 = consequent encroachment).")
+stopBuffAtr = input.float(0.1, "Stop buffer beyond swept extreme (x ATR)", minval=0.0, maxval=1.0, step=0.05, group=grpICT)
+
+// ---- Visuals ----
+grpViz     = "Visuals"
+showHisto  = input.bool(true,  "Draw profile histogram", group=grpViz)
+showNodes  = input.bool(true,  "Mark HVN / LVN",         group=grpViz)
+showFVG    = input.bool(true,  "Draw entry FVG box",     group=grpViz)
+colPOC     = input.color(color.new(color.orange, 0),  "POC",  group=grpViz)
+colVA      = input.color(color.new(color.blue,  0),   "VAH/VAL", group=grpViz)
+colHist    = input.color(color.new(color.gray,  70),  "Histogram", group=grpViz)
+colLong    = input.color(color.new(color.teal,  0),   "Long",  group=grpViz)
+colShort   = input.color(color.new(color.red,   0),   "Short", group=grpViz)
+
+atr = ta.atr(14)
+tol = atr * tolAtrMult
+
+// ====================== SESSION-ANCHORED PROFILE =============================
+// We keep this session's bar highs/lows/volumes in arrays and rebuild the
+// histogram each confirmed bar over [sessionLow, sessionHigh]. The session is
+// small (RTH 5m ~ 78 bars, 1m ~ 390 bars), so the O(bars x rows) rebuild is cheap.
+
+var float[] sH = array.new_float()
+var float[] sL = array.new_float()
+var float[] sV = array.new_float()
+
+inSession = not na(time(timeframe.period, vpSession, vpTz))
+newSession = inSession and not inSession[1]
+
+if newSession
+    array.clear(sH)
+    array.clear(sL)
+    array.clear(sV)
+
+// Accumulate the just-closed bar's data while inside the session.
+if inSession and barstate.isconfirmed
+    array.push(sH, high)
+    array.push(sL, low)
+    array.push(sV, volume)
+
+// ---- Value Area: canonical 70% / two-rows-per-side / tie-break-upper --------
+f_valueArea(float[] bins, int poc, float target) =>
+    total = 0.0
+    for i = 0 to array.size(bins) - 1
+        total += array.get(bins, i)
+    acc   = array.get(bins, poc)
+    up    = poc
+    dn    = poc
+    n     = array.size(bins)
+    tgt   = total * target
+    brk   = false
+    while acc < tgt and not brk
+        a1 = up + 1 <= n - 1 ? array.get(bins, up + 1) : 0.0
+        a2 = up + 2 <= n - 1 ? array.get(bins, up + 2) : 0.0
+        b1 = dn - 1 >= 0      ? array.get(bins, dn - 1) : 0.0
+        b2 = dn - 2 >= 0      ? array.get(bins, dn - 2) : 0.0
+        aboveSum = a1 + a2
+        belowSum = b1 + b2
+        if aboveSum == 0 and belowSum == 0
+            brk := true
+        else if aboveSum >= belowSum    // tie -> expand UP (upper-row convention)
+            acc += aboveSum
+            up  += 2
+        else
+            acc += belowSum
+            dn  -= 2
+    [math.min(dn, n - 1) < 0 ? 0 : dn, math.min(up, n - 1)]
+
+// ---- Build profile from the session arrays ----------------------------------
+// Returns POC/VAH/VAL prices, the bins array, the bottom price and row height.
+f_buildProfile() =>
+    n = array.size(sV)
+    float pocP = na, vahP = na, valP = na, botP = na, rowH = na
+    float[] bins = array.new_float(vpRows, 0.0)
+    if n > 0
+        hi = array.get(sH, 0)
+        lo = array.get(sL, 0)
+        for i = 1 to n - 1
+            hi := math.max(hi, array.get(sH, i))
+            lo := math.min(lo, array.get(sL, i))
+        rng = hi - lo
+        if rng > 0
+            rh = rng / vpRows
+            // distribute each bar's volume uniformly across the rows it spans
+            for i = 0 to n - 1
+                bl = array.get(sL, i)
+                bh = array.get(sH, i)
+                bv = array.get(sV, i)
+                loIdx = math.max(0, math.min(vpRows - 1, int((bl - lo) / rh)))
+                hiIdx = math.max(0, math.min(vpRows - 1, int((bh - lo) / rh)))
+                span  = hiIdx - loIdx + 1
+                per   = bv / span
+                for r = loIdx to hiIdx
+                    array.set(bins, r, array.get(bins, r) + per)
+            // POC = highest-volume row
+            poc = 0
+            for r = 1 to vpRows - 1
+                if array.get(bins, r) > array.get(bins, poc)
+                    poc := r
+            [valIdx, vahIdx] = f_valueArea(bins, poc, vaPercent)
+            pocP := lo + (poc + 0.5) * rh
+            vahP := lo + (vahIdx + 0.5) * rh
+            valP := lo + (valIdx + 0.5) * rh
+            botP := lo
+            rowH := rh
+    [pocP, vahP, valP, bins, botP, rowH]
+
+[poc, vah, val, bins, profBot, profRowH] = f_buildProfile()
+
+// ====================== NAKED POC (prior session) ===========================
+// Carry the prior session's POC forward until price trades through it.
+var float nakedPoc      = na
+var bool  nakedActive   = false
+var float thisSessionPoc = na
+
+if not na(poc)
+    thisSessionPoc := poc
+
+// At a new session, promote last session's POC to the naked POC.
+if newSession and not na(thisSessionPoc[1])
+    nakedPoc    := thisSessionPoc[1]
+    nakedActive := true
+
+// A naked POC is "filled" once a bar trades through it.
+if nakedActive and not na(nakedPoc) and high >= nakedPoc and low <= nakedPoc
+    nakedActive := false
+
+// ====================== SETUP DETECTION (Volume Profile) =====================
+// A SETUP arms when price reaches a key level within `tol`, defining a bias.
+//  - At VAL (lower value edge)  -> LONG  fade bias  (rejection back toward POC)
+//  - At VAH (upper value edge)  -> SHORT fade bias
+//  - At naked POC               -> fade toward it / through it (magnet)
+//  - At POC                     -> context only (no edge bias in V1)
+f_near(level) => not na(level) and math.abs(close - level) <= tol
+
+var int   setupBias  = 0      // +1 long, -1 short, 0 none
+var float setupLevel = na
+var string setupName = ""
+var int   setupAge   = 0
+
+newSetup = false
+if useVAedges and f_near(val) and close >= val
+    setupBias  := 1
+    setupLevel := val
+    setupName  := "VAL"
+    setupAge   := 0
+    newSetup   := true
+else if useVAedges and f_near(vah) and close <= vah
+    setupBias  := -1
+    setupLevel := vah
+    setupName  := "VAH"
+    setupAge   := 0
+    newSetup   := true
+else if useNPOC and nakedActive and f_near(nakedPoc)
+    setupBias  := close < nakedPoc ? 1 : -1
+    setupLevel := nakedPoc
+    setupName  := "nPOC"
+    setupAge   := 0
+    newSetup   := true
+else if usePOC and f_near(poc)
+    setupName  := "POC"   // context tag only; bias stays as-is
+
+// Age out the setup window.
+if setupBias != 0
+    setupAge += 1
+    if setupAge > setupBars
+        setupBias  := 0
+        setupLevel := na
+setupActive = setupBias != 0
+
+// ====================== ENTRY DETECTION (ICT, 1m) ============================
+// Backbone: liquidity sweep -> MSS + displacement (FVG) -> retrace-into-FVG entry,
+// in the SETUP's bias direction. Pivots confirm `pivotLen` bars later.
+
+ph = ta.pivothigh(pivotLen, pivotLen)
+pl = ta.pivotlow(pivotLen, pivotLen)
+var float lastSwingHigh = na
+var float lastSwingLow  = na
+if not na(ph)
+    lastSwingHigh := ph
+if not na(pl)
+    lastSwingLow  := pl
+
+// 1) Liquidity sweep: wick beyond the swing that closes back inside.
+sweptLow  = not na(lastSwingLow)  and low  < lastSwingLow  and close > lastSwingLow
+sweptHigh = not na(lastSwingHigh) and high > lastSwingHigh and close < lastSwingHigh
+
+// 2) Displacement that leaves a 3-candle FVG (the ICT-standard displacement proxy).
+// Guard the [2] history so the boolean is never `na` (v6 errors on na in `and`).
+bullFvg = not na(high[2]) and low > high[2]
+bearFvg = not na(low[2])  and high < low[2]
+fvgTopBull = low        // bull FVG spans [high[2], low]
+fvgBotBull = high[2]
+fvgTopBear = low[2]     // bear FVG spans [high, low[2]]
+fvgBotBear = high
+
+// 2b) Market-structure shift in the bias direction (close beyond the minor swing).
+breakUp   = not na(lastSwingHigh) and (useCloseBreak ? close > lastSwingHigh : high > lastSwingHigh)
+breakDown = not na(lastSwingLow)  and (useCloseBreak ? close < lastSwingLow  : low  < lastSwingLow)
+
+// State machine: once a sweep+MSS+FVG aligns with the setup bias, "arm" an FVG
+// zone, then fire the ENTRY when price retraces into it (>= oteMax of the gap).
+var bool  armed     = false
+var float fvgTop    = na
+var float fvgBot    = na
+var float sweptExt  = na
+var box   fvgBox    = na
+
+// Arm long
+if setupActive and setupBias == 1 and sweptLow and breakUp and bullFvg and not armed
+    armed    := true
+    fvgTop   := fvgTopBull
+    fvgBot   := fvgBotBull
+    sweptExt := low                       // the swept low we will hide the stop under
+    if showFVG
+        fvgBox := box.new(bar_index, fvgTop, bar_index + 5, fvgBot,
+             border_color=colLong, bgcolor=color.new(colLong, 85))
+// Arm short
+if setupActive and setupBias == -1 and sweptHigh and breakDown and bearFvg and not armed
+    armed    := true
+    fvgTop   := fvgTopBear
+    fvgBot   := fvgBotBear
+    sweptExt := high
+    if showFVG
+        fvgBox := box.new(bar_index, fvgTop, bar_index + 5, fvgBot,
+             border_color=colShort, bgcolor=color.new(colShort, 85))
+
+// Entry trigger: price retraces into the armed FVG at/below the OTE threshold.
+longEntry  = false
+shortEntry = false
+var float entryPrice = na
+var float stopPrice  = na
+var float tp1Price   = na
+var float tp2Price   = na
+
+if armed and setupBias == 1
+    fvgMid = fvgBot + (fvgTop - fvgBot) * oteMax     // retrace level (0.5 = CE)
+    if low <= fvgMid
+        longEntry  := true
+        entryPrice := fvgMid
+        stopPrice  := sweptExt - atr * stopBuffAtr
+        tp1Price   := na(poc) ? vah : poc            // target 1: back to fair value
+        tp2Price   := vah                            // target 2: opposite VA edge
+        armed      := false
+    else if not na(sweptExt) and close < sweptExt    // setup invalidated
+        armed := false
+
+if armed and setupBias == -1
+    fvgMid = fvgTop - (fvgTop - fvgBot) * oteMax
+    if high >= fvgMid
+        shortEntry := true
+        entryPrice := fvgMid
+        stopPrice  := sweptExt + atr * stopBuffAtr
+        tp1Price   := na(poc) ? val : poc
+        tp2Price   := val
+        armed      := false
+    else if not na(sweptExt) and close > sweptExt
+        armed := false
+
+// Reset the arm state if the whole setup expired.
+if not setupActive
+    armed := false
+
+// ============================ DRAWING ========================================
+// Profile lines + labels are (re)drawn on the last bar so historical bars stay
+// clean and we respect Pine's object limits.
+var line  pocLine = na
+var line  vahLine = na
+var line  valLine = na
+var label pocLbl  = na
+var label vahLbl  = na
+var label valLbl  = na
+var line  npocLine = na
+
+f_setLevel(line ln, label lb, float price, color c, string txt) =>
+    line  l = ln
+    label b = lb
+    if not na(price)
+        if na(l)
+            l := line.new(bar_index - 1, price, bar_index, price, color=c, width=2,
+                 extend=extend.right)
+            b := label.new(bar_index, price, txt + " " + str.tostring(price, format.mintick),
+                 style=label.style_label_left, color=color.new(c, 80), textcolor=c, size=size.small)
+        else
+            line.set_xy1(l, bar_index - 1, price)
+            line.set_xy2(l, bar_index, price)
+            label.set_xy(b, bar_index, price)
+            label.set_text(b, txt + " " + str.tostring(price, format.mintick))
+    [l, b]
+
+if barstate.islast
+    [pl1, pb1] = f_setLevel(pocLine, pocLbl, poc, colPOC, "POC")
+    pocLine := pl1
+    pocLbl  := pb1
+    [vl1, vb1] = f_setLevel(vahLine, vahLbl, vah, colVA, "VAH")
+    vahLine := vl1
+    vahLbl  := vb1
+    [vl2, vb2] = f_setLevel(valLine, valLbl, val, colVA, "VAL")
+    valLine := vl2
+    valLbl  := vb2
+    // naked POC as a dashed line
+    if useNPOC and nakedActive and not na(nakedPoc)
+        if na(npocLine)
+            npocLine := line.new(bar_index - 1, nakedPoc, bar_index, nakedPoc,
+                 color=color.new(colPOC, 30), style=line.style_dashed, width=1, extend=extend.right)
+        else
+            line.set_xy1(npocLine, bar_index - 1, nakedPoc)
+            line.set_xy2(npocLine, bar_index, nakedPoc)
+    else if not na(npocLine)
+        line.delete(npocLine)
+        npocLine := na
+
+// Histogram (light, drawn on the last bar to the left of price).
+var box[] histoBoxes = array.new_box()
+if showHisto and barstate.islast and not na(profRowH) and array.size(bins) > 0
+    for b in histoBoxes
+        box.delete(b)
+    array.clear(histoBoxes)
+    maxV = 0.0
+    for i = 0 to array.size(bins) - 1
+        maxV := math.max(maxV, array.get(bins, i))
+    if maxV > 0
+        widthBars = 40
+        for i = 0 to array.size(bins) - 1
+            v = array.get(bins, i)
+            w = int(widthBars * v / maxV)
+            if w > 0
+                top = profBot + (i + 1) * profRowH
+                bot = profBot + i * profRowH
+                bx = box.new(bar_index - w, top, bar_index, bot,
+                     border_color=na, bgcolor=colHist)
+                array.push(histoBoxes, bx)
+
+// HVN / LVN markers (on the last bar, at the row price).
+if showNodes and barstate.islast and not na(profRowH) and array.size(bins) >= 2 * nodeWin + 1
+    for i = nodeWin to array.size(bins) - 1 - nodeWin
+        v = array.get(bins, i)
+        nb = 0.0
+        for k = 1 to nodeWin
+            nb += array.get(bins, i - k) + array.get(bins, i + k)
+        avgN = nb / (2 * nodeWin)
+        rowP = profBot + (i + 0.5) * profRowH
+        isHVN = v >= avgN * hvnFactor
+        isLVN = avgN > 0 and v <= avgN * lvnFactor
+        if isHVN
+            label.new(bar_index, rowP, "HVN", style=label.style_label_left,
+                 color=color.new(color.green, 80), textcolor=color.green, size=size.tiny)
+        else if isLVN
+            label.new(bar_index, rowP, "LVN", style=label.style_label_left,
+                 color=color.new(color.red, 80), textcolor=color.red, size=size.tiny)
+
+// Setup marker.
+plotshape(newSetup and setupBias == 1,  title="Long setup",  style=shape.diamond,
+     location=location.belowbar, color=colLong,  size=size.tiny)
+plotshape(newSetup and setupBias == -1, title="Short setup", style=shape.diamond,
+     location=location.abovebar, color=colShort, size=size.tiny)
+
+// Entry markers + stop/target labels.
+plotshape(longEntry,  title="Long entry",  style=shape.triangleup,   location=location.belowbar,
+     color=colLong,  size=size.small, text="ENTRY")
+plotshape(shortEntry, title="Short entry", style=shape.triangledown, location=location.abovebar,
+     color=colShort, size=size.small, text="ENTRY")
+
+if longEntry
+    label.new(bar_index, low,  "L @"  + str.tostring(entryPrice, format.mintick) +
+         "\nSL " + str.tostring(stopPrice, format.mintick) +
+         "\nTP " + str.tostring(tp1Price, format.mintick) + " / " + str.tostring(tp2Price, format.mintick),
+         style=label.style_label_up, color=color.new(colLong, 75), textcolor=colLong, size=size.small)
+if shortEntry
+    label.new(bar_index, high, "S @"  + str.tostring(entryPrice, format.mintick) +
+         "\nSL " + str.tostring(stopPrice, format.mintick) +
+         "\nTP " + str.tostring(tp1Price, format.mintick) + " / " + str.tostring(tp2Price, format.mintick),
+         style=label.style_label_down, color=color.new(colShort, 75), textcolor=colShort, size=size.small)
+
+// ============================ ALERTS =========================================
+alertcondition(newSetup,   title="VP setup formed", message="VP+ICT V1: Volume-Profile SETUP formed")
+alertcondition(longEntry,  title="Long entry",      message="VP+ICT V1: LONG entry (sweep+MSS+FVG at VP level)")
+alertcondition(shortEntry, title="Short entry",     message="VP+ICT V1: SHORT entry (sweep+MSS+FVG at VP level)")
+
+// Single combined alert() for the Phase 2 webhook (JSON payload).
+if longEntry or shortEntry
+    side = longEntry ? "buy" : "sell"
+    alert('{"strategy":"vp_ict_v1","action":"' + side +
+         '","price":' + str.tostring(close) +
+         ',"stop":' + str.tostring(stopPrice) +
+         ',"tp1":' + str.tostring(tp1Price) +
+         ',"tp2":' + str.tostring(tp2Price) +
+         ',"setup":"' + setupName + '"}', alert.freq_once_per_bar_close)

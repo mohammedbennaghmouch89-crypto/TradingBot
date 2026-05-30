@@ -1,14 +1,17 @@
 # Phase 1 — Indicator (Pine Script / TradingView)
 
-This directory holds the custom **Pine Script v5** indicator used inside
+This directory holds the custom **Pine Script v6** indicator used inside
 TradingView.
 
-> **Status: skeleton.** The indicator idea and behavior will be provided by the
-> project owner. No indicator logic is implemented yet (see `AGENTS.md`).
+> **Status: Strategy V1 in review.** First indicator implemented:
+> [`vp_ict_strategy_v1.pine`](vp_ict_strategy_v1.pine) — a Volume-Profile setup
+> (5m) → ICT entry (1m) tool. See [`docs/STRATEGY_V1.md`](../docs/STRATEGY_V1.md)
+> for the trading logic and [`docs/INDICATOR.md`](../docs/INDICATOR.md) for the
+> code internals.
 
 ## Conventions
 
-- Target Pine Script **v5** (`//@version=5`).
+- Target Pine Script **v6** (`//@version=6`).
 - Keep the source in this directory as `*.pine` files.
 - **Performance matters**: minimize per-bar work, avoid unnecessary
   `request.security` calls and repaints, and prefer built-in series ops.
@@ -19,6 +22,6 @@ TradingView.
 
 ```
 indicator/
-├── README.md          # this file
-└── <name>.pine        # the indicator source (added once specified)
+├── README.md                  # this file
+└── vp_ict_strategy_v1.pine    # Strategy V1: VP setup (5m) → ICT entry (1m)
 ```
