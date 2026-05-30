@@ -64,23 +64,23 @@ grpSet     = "Setup (Volume Profile)"
 useVAedges = input.bool(true,  "Setup at VAH / VAL", group=grpSet)
 usePOC     = input.bool(true,  "Setup at POC",       group=grpSet)
 useNPOC    = input.bool(true,  "Setup at naked POC", group=grpSet)
-tolAtrMult = input.float(0.5, "Proximity tolerance (x ATR)", minval=0.05, maxval=2.0, step=0.05, group=grpSet,
+tolAtrMult = input.float(0.75, "Proximity tolerance (x ATR)", minval=0.05, maxval=2.0, step=0.05, group=grpSet,
      tooltip="How close price must get to a level to arm a setup. ATR-based for cross-instrument robustness.")
 setupBars  = input.int(120, "Setup stays active for N bars", minval=3, maxval=400, group=grpSet,
      tooltip="After a level is touched, the ICT entry sequence stays valid this many bars.")
 
 // ---- Entry (ICT) ----
 grpICT     = "Entry (ICT, 1m)"
-pivotLen   = input.int(5, "Swing lookback (internal pivots)", minval=2, maxval=25, group=grpICT,
+pivotLen   = input.int(4, "Swing lookback (internal pivots)", minval=2, maxval=25, group=grpICT,
      tooltip="ta.pivothigh/low length. Pivots confirm this many bars later (repaint lag).")
 useCloseBreak = input.bool(true, "Structure break needs body CLOSE", group=grpICT,
      tooltip="ON = ICT-standard close beyond swing. OFF = wick allowed (LuxAlgo-style).")
 oteMax     = input.float(0.5, "Max retrace into FVG for entry (0..1)", minval=0.1, maxval=1.0, step=0.05, group=grpICT,
      tooltip="Enter only when price retraces at least to this fraction of the FVG (0.5 = consequent encroachment).")
 stopBuffAtr = input.float(0.1, "Stop buffer beyond swept extreme (x ATR)", minval=0.0, maxval=1.0, step=0.05, group=grpICT)
-sweepWindow = input.int(40, "Bars after sweep to find MSS+FVG", minval=1, maxval=200, group=grpICT,
+sweepWindow = input.int(60, "Bars after sweep to find MSS+FVG", minval=1, maxval=200, group=grpICT,
      tooltip="The sequence sweep -> MSS+FVG must complete within this many bars.")
-entryWindow = input.int(40, "Bars after FVG to find retrace entry", minval=1, maxval=200, group=grpICT,
+entryWindow = input.int(60, "Bars after FVG to find retrace entry", minval=1, maxval=200, group=grpICT,
      tooltip="After the FVG arms, the retrace entry must occur within this many bars.")
 
 // ---- Visuals ----

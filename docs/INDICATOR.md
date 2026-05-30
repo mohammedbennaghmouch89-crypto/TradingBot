@@ -119,8 +119,8 @@ See the `INPUTS` block in the `.pine` file; grouped as **Volume Profile**,
 **Setup**, **Entry (ICT)**, and **Visuals**. Every numeric threshold is an input
 because (per both skills) these are conventions to be tuned and backtested, not
 fixed constants. Notable defaults: `vpRows=24`, `vaPercent=0.70`,
-`tolAtrMult=0.5`, `setupBars=120`, `pivotLen=5`, `useCloseForBreak=true`,
-`oteMax=0.5`, `stopBuffAtr=0.1`, `sweepWindow=40`, `entryWindow=40`.
+`tolAtrMult=0.75`, `setupBars=120`, `pivotLen=4`, `useCloseForBreak=true`,
+`oteMax=0.5`, `stopBuffAtr=0.1`, `sweepWindow=60`, `entryWindow=60`.
 
 ## 8. Outputs
 

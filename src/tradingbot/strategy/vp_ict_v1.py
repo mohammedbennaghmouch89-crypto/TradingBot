@@ -39,19 +39,19 @@ class Params:
 
     rows: int = 24
     va_percent: float = 0.70
-    tol_atr_mult: float = 0.5
+    tol_atr_mult: float = 0.75
     setup_bars: int = 120
-    pivot_len: int = 5
+    pivot_len: int = 4
     use_close_break: bool = True
     ote_max: float = 0.5
     stop_buf_atr: float = 0.1
     atr_len: int = 14
     # How many 1m bars after a liquidity sweep we keep looking for the MSS+FVG,
     # and how many bars after arming the FVG we keep waiting for the retrace
-    # entry. A sweep -> displacement -> retrace sequence can take ~30-40 min on
+    # entry. A sweep -> displacement -> retrace sequence can take ~30-60 min on
     # 1m, so these are generous by default; tighten them to trade more selectively.
-    sweep_window: int = 40
-    entry_window: int = 40
+    sweep_window: int = 60
+    entry_window: int = 60
 
 
 @dataclass

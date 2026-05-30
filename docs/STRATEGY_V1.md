@@ -126,12 +126,12 @@ swept extreme before the retrace fills, or if the setup window expires.
 | `vpSession` / `vpTz` | `0930-1600` / NY | Profile session window & timezone. |
 | `vpRows` | 24 | Profile resolution (bin height — most impactful VP setting). |
 | `vaPercent` | 0.70 | Value-Area target (0.68 = true 1σ; 0.80 for 80% rule). |
-| `tolAtrMult` | 0.25 | How close to a level arms a setup (ATR-based). |
-| `setupBars` | 60 | How long the bias stays active after a touch. |
-| `pivotLen` | 5 | 1m swing lookback (confirms `pivotLen` bars later — repaint lag). |
+| `tolAtrMult` | 0.75 | How close to a level arms a setup (ATR-based). |
+| `setupBars` | 120 | How long the bias stays active after a touch. |
+| `pivotLen` | 4 | 1m swing lookback (confirms `pivotLen` bars later — repaint lag). Smaller ⇒ more swings ⇒ more sweeps ⇒ more trades. |
 | `useCloseForBreak` | true | MSS needs a body close (vs wick). |
-| `sweep_window` | 20 | Bars after a sweep to still accept the MSS+FVG (Python). |
-| `entry_window` | 20 | Bars after arming the FVG to still accept the retrace (Python). |
+| `sweep_window` | 60 | Bars after a sweep to still accept the MSS+FVG. |
+| `entry_window` | 60 | Bars after arming the FVG to still accept the retrace. |
 | `oteMax` | 0.5 | Required retrace into the FVG before entering. |
 | `stopBuffAtr` | 0.1 | Stop buffer beyond the swept extreme. |
 
