@@ -114,6 +114,11 @@ retraced, is abandoned rather than left hanging.
   nearer, higher-win-rate target. **`opposite_edge`** = the opposite Value-Area
   edge (full rotation) — bigger winners, lower win rate. Both levels are computed
   and shown on the chart label regardless.
+- **Breakeven stop (`breakevenAt`, default 0.5):** once price reaches 50% of the
+  entry→target distance, the stop is moved to **breakeven (entry)**. This
+  protects open profit on trades that run in your favour and then reverse (a
+  winner that round-trips becomes a ~flat scratch instead of a full stop loss).
+  The move is applied at bar close (no intrabar look-ahead). Set 0 to disable.
 
 The setup is **invalidated** (arm state cleared) if price closes back beyond the
 swept extreme before the retrace fills, or if the setup window expires.
@@ -167,6 +172,7 @@ These compose with the compressed-value-area filter above; all are configurable.
 | `useVwapPD` | true | VWAP premium/discount gate (long ≤ VWAP, short ≥ VWAP). |
 | `useKillzone` | false | Restrict entries to the NY-AM killzone window. |
 | `targetMode` | `POC` | Exit target: `POC` (win rate) or `opposite_edge` (profit). |
+| `breakevenAt` | 0.5 | Move stop to entry once price reaches this fraction of the target. 0 disables. |
 
 Every default is a **convention, not a validated constant** (both skills flag
 this) — they exist to be tuned and, in Phase 2, backtested.

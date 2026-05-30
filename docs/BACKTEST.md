@@ -41,8 +41,11 @@ Options: `--days N` (history to fetch, default 21), `--balance` (default 25000),
 
 P&L per trade = `points × $2 − commission`. One position at a time; positions
 exit on stop, the `target_mode` target (default POC / fair value), or the RTH
-session close (no overnight risk). Entries are additionally gated by the VWAP
-premium/discount filter (on) and an optional NY-AM killzone filter (off).
+session close (no overnight risk). Once price reaches `breakeven_at` (default
+50%) of the target, the stop is moved to entry (breakeven). Entries are gated by
+the VWAP premium/discount filter (on) and an optional NY-AM killzone filter
+(off). The per-trade log (`reports/mnq_trades.csv`) reports each trade's
+**risk_$** (entry-time |entry−stop|×$2) and **R-multiple**.
 
 ## Data source & its limits (important)
 

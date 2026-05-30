@@ -122,7 +122,8 @@ because (per both skills) these are conventions to be tuned and backtested, not
 fixed constants. Notable defaults: `vpRows=24`, `vaPercent=0.70`,
 `tolAtrMult=0.75`, `minPocEdgeAtr=1.25`, `setupBars=120`, `pivotLen=4`,
 `useCloseForBreak=true`, `oteMax=0.5`, `stopBuffAtr=0.1`, `sweepWindow=60`,
-`entryWindow=60`, `useVwapPD=true`, `useKillzone=false`, `targetMode=POC`.
+`entryWindow=60`, `useVwapPD=true`, `useKillzone=false`, `targetMode=POC`,
+`breakevenAt=0.5`.
 
 **Selection filters (applied at the entry trigger).** A session **VWAP**
 (reset each session, `hlc3`-weighted) acts as equilibrium: with `useVwapPD`,

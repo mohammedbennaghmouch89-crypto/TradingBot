@@ -20,7 +20,7 @@ later).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 import pandas as pd
@@ -74,6 +74,10 @@ class Params:
     # Exit target: "poc" (nearer, higher win rate) or "opposite_edge" (TP2,
     # further, bigger winners). POC default keeps the higher win rate.
     target_mode: str = "poc"
+    # Trade management: once price reaches this fraction of the entry->target
+    # distance, move the stop to breakeven (entry). Protects open profit on trades
+    # that run in favour then reverse. 0 disables. 0.5 = halfway to target.
+    breakeven_at: float = 0.5
 
 
 @dataclass
@@ -91,6 +95,12 @@ class Trade:
     exit_price: float | None = None
     exit_reason: str = ""
     points: float = 0.0
+    be_armed: bool = False  # stop has been moved to breakeven
+    initial_stop: float = field(init=False)  # entry-time stop (for risk reporting)
+
+    def __post_init__(self) -> None:
+        # Capture the original stop before any breakeven move mutates ``stop``.
+        self.initial_stop = self.stop
 
 
 @dataclass
@@ -464,26 +474,42 @@ def _check_exit(trade: Trade, hi: float, lo: float, t: pd.Timestamp, p: Params) 
     single target chosen by ``p.target_mode``: ``"poc"`` (TP1 — nearer, highest
     win rate) or ``"opposite_edge"`` (TP2 — the full value-area rotation, bigger
     winners). With the selection filters raising trade quality, running to TP2 is
-    viable and lifts profit. Conservative tie-break: if a bar straddles both stop
-    and target, assume the **stop** is hit first so the backtest never flatters
-    itself.
+    viable and lifts profit.
+
+    Trade management: once price reaches ``p.breakeven_at`` of the entry→target
+    distance, the stop is moved to breakeven (entry). The move is applied at the
+    end of a bar — *after* that bar's stop/target checks — so it never uses
+    intrabar look-ahead; it protects subsequent bars. A breakeven exit is tagged
+    ``"be"``. Conservative tie-break: if a bar straddles both stop and target,
+    assume the **stop** is hit first so the backtest never flatters itself.
     """
     target = trade.tp1 if p.target_mode == "poc" else trade.tp2
     reason = "tp1" if p.target_mode == "poc" else "tp2"
     if trade.direction == 1:
         if lo <= trade.stop:
-            _close(trade, t, trade.stop, "stop")
+            _close(trade, t, trade.stop, "be" if trade.be_armed else "stop")
             return True
         if hi >= target:
             _close(trade, t, target, reason)
             return True
+        # Move stop to breakeven once price reaches `breakeven_at` of the target.
+        if p.breakeven_at > 0 and not trade.be_armed:
+            trigger = trade.entry_price + (target - trade.entry_price) * p.breakeven_at
+            if hi >= trigger:
+                trade.stop = trade.entry_price
+                trade.be_armed = True
     else:
         if hi >= trade.stop:
-            _close(trade, t, trade.stop, "stop")
+            _close(trade, t, trade.stop, "be" if trade.be_armed else "stop")
             return True
         if lo <= target:
             _close(trade, t, target, reason)
             return True
+        if p.breakeven_at > 0 and not trade.be_armed:
+            trigger = trade.entry_price - (trade.entry_price - target) * p.breakeven_at
+            if lo <= trigger:
+                trade.stop = trade.entry_price
+                trade.be_armed = True
     return False
 
 

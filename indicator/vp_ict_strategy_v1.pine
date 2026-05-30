@@ -94,6 +94,8 @@ useKillzone = input.bool(false, "Killzone time filter (NY AM)", group=grpFilt,
 kzStart    = input.session("0930-1130", "Killzone window (NY)", group=grpFilt)
 targetMode = input.string("POC", "Exit target", options=["POC","Opposite VA edge"], group=grpFilt,
      tooltip="POC = nearer, higher win rate. Opposite edge = TP2, bigger winners.")
+breakevenAt = input.float(0.5, "Move SL to breakeven at (frac of target)", minval=0.0, maxval=1.0, step=0.05, group=grpFilt,
+     tooltip="When price reaches this fraction of entry->target, move stop to entry. Applied live by the bot; shown as 'BE @' on the entry label. 0 disables.")
 
 // ---- Visuals ----
 grpViz     = "Visuals"
@@ -506,15 +508,20 @@ plotshape(longEntry,  title="Long entry",  style=shape.triangleup,   location=lo
 plotshape(shortEntry, title="Short entry", style=shape.triangledown, location=location.abovebar,
      color=colShort, size=size.small, text="ENTRY")
 
+// Working target (bot exit) and the breakeven trigger price shown to the trader.
+primaryTarget = targetMode == "POC" ? tp1Price : tp2Price
+beLevel = entryPrice + (primaryTarget - entryPrice) * breakevenAt
+beTxt = breakevenAt > 0 ? "\nBE @" + str.tostring(beLevel, format.mintick) : ""
+
 if longEntry
     label.new(bar_index, low,  "L @"  + str.tostring(entryPrice, format.mintick) +
          "\nSL " + str.tostring(stopPrice, format.mintick) +
-         "\nTP " + str.tostring(tp1Price, format.mintick) + " / " + str.tostring(tp2Price, format.mintick),
+         "\nTP " + str.tostring(tp1Price, format.mintick) + " / " + str.tostring(tp2Price, format.mintick) + beTxt,
          style=label.style_label_up, color=color.new(colLong, 75), textcolor=colLong, size=size.small)
 if shortEntry
     label.new(bar_index, high, "S @"  + str.tostring(entryPrice, format.mintick) +
          "\nSL " + str.tostring(stopPrice, format.mintick) +
-         "\nTP " + str.tostring(tp1Price, format.mintick) + " / " + str.tostring(tp2Price, format.mintick),
+         "\nTP " + str.tostring(tp1Price, format.mintick) + " / " + str.tostring(tp2Price, format.mintick) + beTxt,
          style=label.style_label_down, color=color.new(colShort, 75), textcolor=colShort, size=size.small)
 
 // ============================ ALERTS =========================================

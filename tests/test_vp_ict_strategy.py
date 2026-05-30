@@ -18,6 +18,8 @@ import pandas as pd
 from tradingbot.indicators.volume_profile import compute_profile
 from tradingbot.strategy.vp_ict_v1 import (
     Params,
+    Trade,
+    _check_exit,
     _detect_setup,
     _rolling_swings,
     _rth_mask,
@@ -175,6 +177,45 @@ def test_session_vwap_resets_each_session() -> None:
     # VWAP must always sit within the running high/low envelope of the data.
     assert np.nanmin(vwap) >= df1["low"].min() - 1e-6
     assert np.nanmax(vwap) <= df1["high"].max() + 1e-6
+
+
+def test_breakeven_moves_stop_to_entry_then_scratches() -> None:
+    """At 50% of the target move the stop must jump to entry, then exit flat.
+
+    Long entry 100, stop 90, POC target 120 -> the breakeven trigger is 110.
+    A bar that tags 110 (but not the target) must arm breakeven and move the stop
+    to 100 (entry) without exiting; a later bar dipping to 99 must then exit at
+    100 tagged ``"be"`` for ~zero P&L. This protects open profit from a full
+    reversal — the point of the management rule.
+    """
+    p = Params(target_mode="poc", breakeven_at=0.5)
+    ts = pd.Timestamp("2026-05-11 14:00", tz="UTC")
+    tr = Trade(1, "VAL", ts, 100.0, 90.0, 120.0, 130.0)
+    # Bar reaches the 110 breakeven trigger but not the 120 target: arm, no exit.
+    assert _check_exit(tr, hi=111.0, lo=101.0, t=ts, p=p) is False
+    assert tr.be_armed and tr.stop == 100.0
+    assert tr.initial_stop == 90.0  # entry-time risk reference is preserved
+    # A later bar pulls back through entry: exit at breakeven, ~flat.
+    assert _check_exit(tr, hi=101.0, lo=99.0, t=ts, p=p) is True
+    assert tr.exit_reason == "be"
+    assert tr.exit_price == 100.0
+    assert tr.points == 0.0
+
+
+def test_breakeven_disabled_rides_to_original_stop() -> None:
+    """With breakeven_at=0 the stop never moves; a reversal hits the full stop.
+
+    Confirms the management is opt-in: the same path that scratched above must
+    instead take the original -10-point stop loss when management is off.
+    """
+    p = Params(target_mode="poc", breakeven_at=0.0)
+    ts = pd.Timestamp("2026-05-11 14:00", tz="UTC")
+    tr = Trade(1, "VAL", ts, 100.0, 90.0, 120.0, 130.0)
+    assert _check_exit(tr, hi=111.0, lo=101.0, t=ts, p=p) is False
+    assert not tr.be_armed and tr.stop == 90.0
+    assert _check_exit(tr, hi=101.0, lo=89.0, t=ts, p=p) is True
+    assert tr.exit_reason == "stop"
+    assert tr.points == -10.0
 
 
 def test_killzone_filter_is_subset_of_unfiltered() -> None:

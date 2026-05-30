@@ -71,12 +71,13 @@ class BacktestResult:
         return float((self.equity_curve - running_max).min())
 
     def trade_risk(self, trade: Trade) -> float:
-        """Dollar risk of a trade = |entry - stop| x point value (1 contract).
+        """Dollar risk committed at entry = |entry - initial_stop| x point value.
 
-        The amount that would be lost if the protective stop were hit — the
-        denominator of the trade's R-multiple.
+        Uses the *entry-time* stop so the figure reflects the risk taken when the
+        trade was opened — a later breakeven move reduces the live risk but not
+        what was committed. It is the denominator of the trade's R-multiple.
         """
-        return abs(trade.entry_price - trade.stop) * self.point_value
+        return abs(trade.entry_price - trade.initial_stop) * self.point_value
 
     @property
     def avg_risk(self) -> float:

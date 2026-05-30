@@ -73,6 +73,8 @@ run on deterministic synthetic data. See `docs/STRATEGY_V1.md`. No network.
 | `test_no_trades_outside_rth` | No entry falls outside RTH. | Confirms the intraday gate doesn't leak into hours the strategy can't trade. |
 | `test_session_vwap_resets_each_session` | VWAP stays within the price envelope (resets per session). | A cross-session leak would drift VWAP and corrupt the premium/discount gate. |
 | `test_killzone_filter_is_subset_of_unfiltered` | Enabling the killzone only removes trades, never adds. | Confirms the time filter is purely subtractive, not a change to entry logic. |
+| `test_breakeven_moves_stop_to_entry_then_scratches` | At 50% of target the stop jumps to entry; a reversal then exits ~flat (`be`). | Verifies the breakeven management protects open profit (and preserves `initial_stop`). |
+| `test_breakeven_disabled_rides_to_original_stop` | With `breakeven_at=0` the stop never moves; a reversal takes the full stop. | Confirms management is opt-in and doesn't alter the baseline exit. |
 
 ### `tests/test_volume_profile.py`
 
