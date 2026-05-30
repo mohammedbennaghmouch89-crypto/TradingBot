@@ -1,0 +1,492 @@
+//@version=6
+// =============================================================================
+//  VP + ICT Strategy V1   —   STRATEGY version (TradingView Strategy Tester)
+// -----------------------------------------------------------------------------
+//  Identical setup/entry logic to indicator/vp_ict_strategy_v1.pine, but it
+//  places real strategy orders so TradingView's Strategy Tester produces the
+//  native report (net profit, max drawdown, profit factor, per-trade list) to
+//  cross-check against the Python backtest in src/tradingbot/.
+//
+//  Trade model (matches the Python backtest):
+//   - 1 contract, $25,000 account, commission $0.50/side (~$1 round trip).
+//   - Enter on the ICT retrace (sweep -> MSS+FVG -> retrace) at a VP level, gated
+//     by the VWAP premium/discount filter (and optional killzone).
+//   - Stop beyond the swept extreme; target = POC (or opposite VA edge).
+//   - Move stop to breakeven once price reaches `breakevenAt` of the target.
+//   - RTH only; flat at the session close (no overnight risk).
+//
+//  Use it on MNQ1! — TradingView knows the $2/point contract value, so the
+//  Strategy Tester reports P&L in real dollars for 1 micro contract.
+// =============================================================================
+
+strategy("VP+ICT V1 Strategy", shorttitle="VP+ICT V1 STR", overlay=true,
+     initial_capital=25000, currency=currency.USD,
+     default_qty_type=strategy.fixed, default_qty_value=1, pyramiding=0,
+     process_orders_on_close=true,
+     commission_type=strategy.commission.cash_per_order, commission_value=0.5,
+     max_lines_count=500, max_labels_count=500, max_boxes_count=500)
+
+// ============================ INPUTS =========================================
+
+// ---- Volume Profile ----
+grpVP      = "Volume Profile (3m context)"
+vpSession  = input.session("0930-1600", "Session window",            group=grpVP,
+     tooltip="The profile is built only from bars inside this window (RTH default).")
+vpTz       = input.string("America/New_York", "Session timezone",    group=grpVP)
+vpRows     = input.int(24, "Profile rows", minval=8, maxval=100,     group=grpVP,
+     tooltip="Row count = bin height. The single most outcome-changing VP setting.")
+vaPercent  = input.float(0.70, "Value Area %", minval=0.5, maxval=0.95, step=0.01, group=grpVP,
+     tooltip="0.70 convention (~1 sigma). 0.68 = true 1 sigma; 0.80 for the 80% rule.")
+nodeWin    = input.int(2, "HVN/LVN window (rows each side)", minval=1, maxval=5, group=grpVP)
+lvnFactor  = input.float(0.6, "LVN max vs neighbours", minval=0.1, maxval=1.0, step=0.05, group=grpVP,
+     tooltip="A row is an LVN if it is a local valley AND below this fraction of its neighbours' avg.")
+hvnFactor  = input.float(1.4, "HVN min vs neighbours", minval=1.0, maxval=3.0, step=0.05, group=grpVP)
+
+// ---- Setup (which levels, how close) ----
+grpSet     = "Setup (Volume Profile)"
+useVAedges = input.bool(true,  "Setup at VAH / VAL", group=grpSet)
+usePOC     = input.bool(true,  "Setup at POC",       group=grpSet)
+useNPOC    = input.bool(true,  "Setup at naked POC", group=grpSet)
+tolAtrMult = input.float(0.75, "Proximity tolerance (x ATR)", minval=0.05, maxval=2.0, step=0.05, group=grpSet,
+     tooltip="How close price must get to a level to arm a setup. ATR-based for cross-instrument robustness.")
+setupBars  = input.int(120, "Setup stays active for N bars", minval=3, maxval=400, group=grpSet,
+     tooltip="After a level is touched, the ICT entry sequence stays valid this many bars.")
+minPocEdgeAtr = input.float(1.25, "Min POC-to-edge distance (x ATR)", minval=0.0, maxval=5.0, step=0.25, group=grpSet,
+     tooltip="Skip a VAH/VAL setup when the value area is compressed (POC too close to that edge). 0 disables.")
+
+// ---- Entry (ICT) ----
+grpICT     = "Entry (ICT, 1m)"
+pivotLen   = input.int(4, "Swing lookback (internal pivots)", minval=2, maxval=25, group=grpICT,
+     tooltip="ta.pivothigh/low length. Pivots confirm this many bars later (repaint lag).")
+useCloseBreak = input.bool(true, "Structure break needs body CLOSE", group=grpICT,
+     tooltip="ON = ICT-standard close beyond swing. OFF = wick allowed (LuxAlgo-style).")
+oteMax     = input.float(0.5, "Max retrace into FVG for entry (0..1)", minval=0.1, maxval=1.0, step=0.05, group=grpICT,
+     tooltip="Enter only when price retraces at least to this fraction of the FVG (0.5 = consequent encroachment).")
+stopBuffAtr = input.float(0.1, "Stop buffer beyond swept extreme (x ATR)", minval=0.0, maxval=1.0, step=0.05, group=grpICT)
+sweepWindow = input.int(60, "Bars after sweep to find MSS+FVG", minval=1, maxval=200, group=grpICT,
+     tooltip="The sequence sweep -> MSS+FVG must complete within this many bars.")
+entryWindow = input.int(60, "Bars after FVG to find retrace entry", minval=1, maxval=200, group=grpICT,
+     tooltip="After the FVG arms, the retrace entry must occur within this many bars.")
+
+// ---- Trade-selection filters (ICT/VP confluence) ----
+grpFilt    = "Selection filters"
+useVwapPD  = input.bool(true, "VWAP premium/discount gate", group=grpFilt,
+     tooltip="Longs only at/below session VWAP (discount); shorts only at/above (premium). VWAP = equilibrium.")
+useKillzone = input.bool(false, "Killzone time filter (NY AM)", group=grpFilt,
+     tooltip="Only enter inside the NY-AM window. Lifts win rate but is selective (few trades). Off by default.")
+kzStart    = input.session("0930-1130", "Killzone window (NY)", group=grpFilt)
+targetMode = input.string("POC", "Exit target", options=["POC","Opposite VA edge"], group=grpFilt,
+     tooltip="POC = nearer, higher win rate. Opposite edge = TP2, bigger winners.")
+breakevenAt = input.float(0.5, "Move SL to breakeven at (frac of target)", minval=0.0, maxval=1.0, step=0.05, group=grpFilt,
+     tooltip="When price reaches this fraction of entry->target, move stop to entry. 0 disables.")
+flatEOD    = input.bool(true, "Flatten at session close (no overnight)", group=grpFilt)
+
+// ---- Visuals ----
+grpViz     = "Visuals"
+showHisto  = input.bool(true,  "Draw profile histogram", group=grpViz)
+showNodes  = input.bool(true,  "Mark HVN / LVN",         group=grpViz)
+showFVG    = input.bool(true,  "Draw entry FVG box",     group=grpViz)
+colPOC     = input.color(color.new(color.orange, 0),  "POC",  group=grpViz)
+colVA      = input.color(color.new(color.blue,  0),   "VAH/VAL", group=grpViz)
+colHist    = input.color(color.new(color.gray,  70),  "Histogram", group=grpViz)
+colLong    = input.color(color.new(color.teal,  0),   "Long",  group=grpViz)
+colShort   = input.color(color.new(color.red,   0),   "Short", group=grpViz)
+
+atr = ta.atr(14)
+tol = atr * tolAtrMult
+
+// ====================== SESSION-ANCHORED PROFILE =============================
+var float[] sH = array.new_float()
+var float[] sL = array.new_float()
+var float[] sV = array.new_float()
+
+inSession = not na(time(timeframe.period, vpSession, vpTz))
+newSession = inSession and not inSession[1]
+
+if newSession
+    array.clear(sH)
+    array.clear(sL)
+    array.clear(sV)
+
+// Session VWAP (equilibrium) for the premium-discount gate; killzone flag.
+var float vwapPV  = na
+var float vwapVol = na
+if newSession
+    vwapPV  := hlc3 * volume
+    vwapVol := volume
+else
+    vwapPV  := nz(vwapPV) + hlc3 * volume
+    vwapVol := nz(vwapVol) + volume
+sessionVwap = vwapVol > 0 ? vwapPV / vwapVol : na
+inKillzone = not na(time(timeframe.period, kzStart, vpTz))
+
+if inSession and barstate.isconfirmed
+    array.push(sH, high)
+    array.push(sL, low)
+    array.push(sV, volume)
+
+// ---- Value Area: canonical 70% / two-rows-per-side / tie-break-upper --------
+f_valueArea(float[] bins, int poc, float target) =>
+    total = 0.0
+    for i = 0 to array.size(bins) - 1
+        total += array.get(bins, i)
+    acc   = array.get(bins, poc)
+    up    = poc
+    dn    = poc
+    n     = array.size(bins)
+    tgt   = total * target
+    brk   = false
+    while acc < tgt and not brk
+        a1 = up + 1 <= n - 1 ? array.get(bins, up + 1) : 0.0
+        a2 = up + 2 <= n - 1 ? array.get(bins, up + 2) : 0.0
+        b1 = dn - 1 >= 0      ? array.get(bins, dn - 1) : 0.0
+        b2 = dn - 2 >= 0      ? array.get(bins, dn - 2) : 0.0
+        aboveSum = a1 + a2
+        belowSum = b1 + b2
+        if aboveSum == 0 and belowSum == 0
+            brk := true
+        else if aboveSum >= belowSum
+            acc += aboveSum
+            up  += 2
+        else
+            acc += belowSum
+            dn  -= 2
+    [math.min(dn, n - 1) < 0 ? 0 : dn, math.min(up, n - 1)]
+
+// ---- Build profile from the session arrays ----------------------------------
+f_buildProfile() =>
+    n = math.min(array.size(sH), math.min(array.size(sL), array.size(sV)))
+    float pocP = na
+    float vahP = na
+    float valP = na
+    float botP = na
+    float rowH = na
+    float[] bins = array.new_float(vpRows, 0.0)
+    if n > 0
+        hi = array.get(sH, 0)
+        lo = array.get(sL, 0)
+        if n > 1
+            for i = 1 to n - 1
+                hi := math.max(hi, array.get(sH, i))
+                lo := math.min(lo, array.get(sL, i))
+        rng = hi - lo
+        if rng > 0
+            rh = rng / vpRows
+            for i = 0 to n - 1
+                bl = array.get(sL, i)
+                bh = array.get(sH, i)
+                bv = array.get(sV, i)
+                loIdx = math.max(0, math.min(vpRows - 1, int((bl - lo) / rh)))
+                hiIdx = math.max(0, math.min(vpRows - 1, int((bh - lo) / rh)))
+                span  = hiIdx - loIdx + 1
+                per   = bv / span
+                for r = loIdx to hiIdx
+                    array.set(bins, r, array.get(bins, r) + per)
+            poc = 0
+            for r = 1 to vpRows - 1
+                if array.get(bins, r) > array.get(bins, poc)
+                    poc := r
+            [valIdx, vahIdx] = f_valueArea(bins, poc, vaPercent)
+            pocP := lo + (poc + 0.5) * rh
+            vahP := lo + (vahIdx + 0.5) * rh
+            valP := lo + (valIdx + 0.5) * rh
+            botP := lo
+            rowH := rh
+    [pocP, vahP, valP, bins, botP, rowH]
+
+[poc, vah, val, bins, profBot, profRowH] = f_buildProfile()
+
+// ====================== NAKED POC (prior session) ===========================
+var float nakedPoc      = na
+var bool  nakedActive   = false
+var float thisSessionPoc = na
+
+if not na(poc)
+    thisSessionPoc := poc
+if newSession and not na(thisSessionPoc[1])
+    nakedPoc    := thisSessionPoc[1]
+    nakedActive := true
+if nakedActive and not na(nakedPoc) and high >= nakedPoc and low <= nakedPoc
+    nakedActive := false
+
+// ====================== SETUP DETECTION (Volume Profile) =====================
+f_near(level) => not na(level) and math.abs(close - level) <= tol
+
+minRoom = minPocEdgeAtr * atr
+roomVAL = not na(poc) and not na(val) and math.abs(poc - val) >= minRoom
+roomVAH = not na(poc) and not na(vah) and math.abs(vah - poc) >= minRoom
+
+var int   setupBias  = 0
+var float setupLevel = na
+var string setupName = ""
+var int   setupAge   = 0
+
+newSetup = false
+if useVAedges and f_near(val) and close >= val and roomVAL
+    setupBias  := 1
+    setupLevel := val
+    setupName  := "VAL"
+    setupAge   := 0
+    newSetup   := true
+else if useVAedges and f_near(vah) and close <= vah and roomVAH
+    setupBias  := -1
+    setupLevel := vah
+    setupName  := "VAH"
+    setupAge   := 0
+    newSetup   := true
+else if useNPOC and nakedActive and f_near(nakedPoc)
+    setupBias  := close < nakedPoc ? 1 : -1
+    setupLevel := nakedPoc
+    setupName  := "nPOC"
+    setupAge   := 0
+    newSetup   := true
+else if usePOC and f_near(poc)
+    setupName  := "POC"
+
+if setupBias != 0
+    setupAge += 1
+    if setupAge > setupBars
+        setupBias  := 0
+        setupLevel := na
+setupActive = setupBias != 0
+
+// ====================== ENTRY DETECTION (ICT, 1m) ============================
+ph = ta.pivothigh(pivotLen, pivotLen)
+pl = ta.pivotlow(pivotLen, pivotLen)
+var float lastSwingHigh = na
+var float lastSwingLow  = na
+if not na(ph)
+    lastSwingHigh := ph
+if not na(pl)
+    lastSwingLow  := pl
+
+sweptLow  = not na(lastSwingLow)  and low  < lastSwingLow  and close > lastSwingLow
+sweptHigh = not na(lastSwingHigh) and high > lastSwingHigh and close < lastSwingHigh
+
+bullFvg = not na(high[2]) and low > high[2]
+bearFvg = not na(low[2])  and high < low[2]
+fvgTopBull = low
+fvgBotBull = high[2]
+fvgTopBear = low[2]
+fvgBotBear = high
+
+breakUp   = not na(lastSwingHigh) and (useCloseBreak ? close > lastSwingHigh : high > lastSwingHigh)
+breakDown = not na(lastSwingLow)  and (useCloseBreak ? close < lastSwingLow  : low  < lastSwingLow)
+
+var int   stage    = 0
+var int   stageDir = 0
+var int   stageAge = 0
+var float fvgTop   = na
+var float fvgBot   = na
+var float sweptExt = na
+var box   fvgBox   = na
+
+longEntry  = false
+shortEntry = false
+var float entryPrice = na
+var float stopPrice  = na
+var float tp1Price   = na
+var float tp2Price   = na
+
+stageAge += 1
+
+if stage == 0 and setupActive
+    if setupBias == 1 and sweptLow
+        stage    := 1
+        stageDir := 1
+        stageAge := 0
+        sweptExt := low
+    else if setupBias == -1 and sweptHigh
+        stage    := 1
+        stageDir := -1
+        stageAge := 0
+        sweptExt := high
+else if stage == 1
+    if stageAge > sweepWindow or stageDir != setupBias
+        stage := 0
+    else if stageDir == 1 and breakUp and bullFvg
+        stage    := 2
+        stageAge := 0
+        fvgTop   := fvgTopBull
+        fvgBot   := fvgBotBull
+        if showFVG
+            fvgBox := box.new(bar_index, fvgTop, bar_index + 5, fvgBot,
+                 border_color=colLong, bgcolor=color.new(colLong, 85))
+    else if stageDir == -1 and breakDown and bearFvg
+        stage    := 2
+        stageAge := 0
+        fvgTop   := fvgTopBear
+        fvgBot   := fvgBotBear
+        if showFVG
+            fvgBox := box.new(bar_index, fvgTop, bar_index + 5, fvgBot,
+                 border_color=colShort, bgcolor=color.new(colShort, 85))
+else if stage == 2
+    if stageAge > entryWindow
+        stage := 0
+    else if stageDir == 1
+        fvgMid = fvgBot + (fvgTop - fvgBot) * oteMax
+        kzOk = not useKillzone or inKillzone
+        pdOk = not useVwapPD or na(sessionVwap) or fvgMid <= sessionVwap
+        if low <= fvgMid
+            if kzOk and pdOk
+                longEntry  := true
+                entryPrice := fvgMid
+                stopPrice  := sweptExt - atr * stopBuffAtr
+                tp1Price   := na(poc) ? vah : poc
+                tp2Price   := vah
+            stage := 0
+        else if not na(sweptExt) and close < sweptExt
+            stage := 0
+    else if stageDir == -1
+        fvgMid = fvgTop - (fvgTop - fvgBot) * oteMax
+        kzOk = not useKillzone or inKillzone
+        pdOk = not useVwapPD or na(sessionVwap) or fvgMid >= sessionVwap
+        if high >= fvgMid
+            if kzOk and pdOk
+                shortEntry := true
+                entryPrice := fvgMid
+                stopPrice  := sweptExt + atr * stopBuffAtr
+                tp1Price   := na(poc) ? val : poc
+                tp2Price   := val
+            stage := 0
+        else if not na(sweptExt) and close > sweptExt
+            stage := 0
+
+if not setupActive
+    stage := 0
+
+primaryTarget = targetMode == "POC" ? tp1Price : tp2Price
+beLevel = entryPrice + (primaryTarget - entryPrice) * breakevenAt
+
+// ====================== STRATEGY ORDERS ======================================
+// Enter only in-session; manage stop/target each bar with the breakeven move;
+// flatten at the session close. Stored levels are the prices computed above.
+var float sStop   = na
+var float sTarget = na
+var float sBE     = na
+var bool  sBEon   = false
+
+if strategy.position_size == 0 and inSession
+    if longEntry and not na(stopPrice) and not na(primaryTarget)
+        strategy.entry("Long", strategy.long)
+        sStop   := stopPrice
+        sTarget := primaryTarget
+        sBE     := beLevel
+        sBEon   := false
+    else if shortEntry and not na(stopPrice) and not na(primaryTarget)
+        strategy.entry("Short", strategy.short)
+        sStop   := stopPrice
+        sTarget := primaryTarget
+        sBE     := beLevel
+        sBEon   := false
+
+// Flatten at the close of the session (priority over the stop/target orders).
+if flatEOD and not inSession and strategy.position_size != 0
+    strategy.close_all(comment="EOD")
+else
+    if strategy.position_size > 0
+        if breakevenAt > 0 and not sBEon and high >= sBE
+            sStop := strategy.position_avg_price
+            sBEon := true
+        strategy.exit("ExitL", from_entry="Long", stop=sStop, limit=sTarget)
+    else if strategy.position_size < 0
+        if breakevenAt > 0 and not sBEon and low <= sBE
+            sStop := strategy.position_avg_price
+            sBEon := true
+        strategy.exit("ExitS", from_entry="Short", stop=sStop, limit=sTarget)
+
+// ============================ DRAWING ========================================
+var line  pocLine = na
+var line  vahLine = na
+var line  valLine = na
+var label pocLbl  = na
+var label vahLbl  = na
+var label valLbl  = na
+var line  npocLine = na
+
+f_setLevel(line ln, label lb, float price, color c, string txt) =>
+    line  l = ln
+    label b = lb
+    if not na(price)
+        if na(l)
+            l := line.new(bar_index - 1, price, bar_index, price, color=c, width=2,
+                 extend=extend.right)
+            b := label.new(bar_index, price, txt + " " + str.tostring(price, format.mintick),
+                 style=label.style_label_left, color=color.new(c, 80), textcolor=c, size=size.small)
+        else
+            line.set_xy1(l, bar_index - 1, price)
+            line.set_xy2(l, bar_index, price)
+            label.set_xy(b, bar_index, price)
+            label.set_text(b, txt + " " + str.tostring(price, format.mintick))
+    [l, b]
+
+if barstate.islast
+    [pl1, pb1] = f_setLevel(pocLine, pocLbl, poc, colPOC, "POC")
+    pocLine := pl1
+    pocLbl  := pb1
+    [vl1, vb1] = f_setLevel(vahLine, vahLbl, vah, colVA, "VAH")
+    vahLine := vl1
+    vahLbl  := vb1
+    [vl2, vb2] = f_setLevel(valLine, valLbl, val, colVA, "VAL")
+    valLine := vl2
+    valLbl  := vb2
+    if useNPOC and nakedActive and not na(nakedPoc)
+        if na(npocLine)
+            npocLine := line.new(bar_index - 1, nakedPoc, bar_index, nakedPoc,
+                 color=color.new(colPOC, 30), style=line.style_dashed, width=1, extend=extend.right)
+        else
+            line.set_xy1(npocLine, bar_index - 1, nakedPoc)
+            line.set_xy2(npocLine, bar_index, nakedPoc)
+    else if not na(npocLine)
+        line.delete(npocLine)
+        npocLine := na
+
+var box[] histoBoxes = array.new_box()
+if showHisto and barstate.islast and not na(profRowH) and array.size(bins) > 0
+    for b in histoBoxes
+        box.delete(b)
+    array.clear(histoBoxes)
+    maxV = 0.0
+    for i = 0 to array.size(bins) - 1
+        maxV := math.max(maxV, array.get(bins, i))
+    if maxV > 0
+        widthBars = 40
+        for i = 0 to array.size(bins) - 1
+            v = array.get(bins, i)
+            w = int(widthBars * v / maxV)
+            if w > 0
+                top = profBot + (i + 1) * profRowH
+                bot = profBot + i * profRowH
+                bx = box.new(bar_index - w, top, bar_index, bot,
+                     border_color=na, bgcolor=colHist)
+                array.push(histoBoxes, bx)
+
+if showNodes and barstate.islast and not na(profRowH) and array.size(bins) >= 2 * nodeWin + 1
+    for i = nodeWin to array.size(bins) - 1 - nodeWin
+        v = array.get(bins, i)
+        nb = 0.0
+        for k = 1 to nodeWin
+            nb += array.get(bins, i - k) + array.get(bins, i + k)
+        avgN = nb / (2 * nodeWin)
+        rowP = profBot + (i + 0.5) * profRowH
+        isHVN = v >= avgN * hvnFactor
+        isLVN = avgN > 0 and v <= avgN * lvnFactor
+        if isHVN
+            label.new(bar_index, rowP, "HVN", style=label.style_label_left,
+                 color=color.new(color.green, 80), textcolor=color.green, size=size.tiny)
+        else if isLVN
+            label.new(bar_index, rowP, "LVN", style=label.style_label_left,
+                 color=color.new(color.red, 80), textcolor=color.red, size=size.tiny)
+
+plot(useVwapPD ? sessionVwap : na, title="Session VWAP",
+     color=color.new(color.purple, 0), linewidth=1)
+
+plotshape(newSetup and setupBias == 1,  title="Long setup",  style=shape.diamond,
+     location=location.belowbar, color=colLong,  size=size.tiny)
+plotshape(newSetup and setupBias == -1, title="Short setup", style=shape.diamond,
+     location=location.abovebar, color=colShort, size=size.tiny)
+
+// ============================ ALERTS =========================================
+alertcondition(newSetup,   title="VP setup formed", message="VP+ICT V1: Volume-Profile SETUP formed")
+alertcondition(longEntry,  title="Long entry",      message="VP+ICT V1: LONG entry")
+alertcondition(shortEntry, title="Short entry",     message="VP+ICT V1: SHORT entry")
