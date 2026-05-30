@@ -166,6 +166,15 @@ def main() -> None:
     print(result.summary())
     print("=" * 48 + "\n")
 
+    log = result.trade_log()
+    if not log.empty:
+        print("Per-trade log (risk_$ = $ risked if stopped; R = pnl / risk):")
+        with pd.option_context("display.max_columns", None, "display.width", 200):
+            print(log.to_string(index=False))
+        csv_path = REPORTS / "mnq_trades.csv"
+        log.to_csv(csv_path, index=False)
+        print(f"\n  wrote trade log to {csv_path}")
+
     print("Rendering charts...")
     plot_context(df_ctx, params, args.context_min, REPORTS / "mnq_context_setups.png")
     plot_1m(df1, trades, REPORTS / "mnq_1m_trades.png")

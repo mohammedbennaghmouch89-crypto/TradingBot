@@ -99,3 +99,23 @@ def test_empty_trades_returns_starting_balance() -> None:
     assert r.num_trades == 0
     assert r.max_drawdown == 0.0
     assert r.win_rate == 0.0
+    assert r.avg_risk == 0.0
+    assert r.trade_log().empty
+
+
+def test_trade_risk_and_r_multiple() -> None:
+    """Per-trade risk = |entry-stop|*$2 and R = net pnl / risk.
+
+    Risk is the dollars lost if stopped; R expresses the result in units of that
+    risk. A long entered 20000 with a 10-pt stop risks 10*$2=$20; a +20-pt win
+    nets 20*$2-commission and should report ~+2R. These are the numbers a trader
+    sizes and judges trades by, so they must be exact.
+    """
+    tr = _closed_trade(1, 20000.0, 20020.0, "2026-05-11 14:00")  # stop = 19990
+    r = run_portfolio([tr], starting_balance=25_000.0, commission_rt=0.0)
+    assert r.trade_risk(tr) == 20.0  # |20000-19990| * $2
+    assert r.avg_risk == 20.0
+    log = r.trade_log()
+    assert list(log["risk_$"]) == [20.0]
+    assert log["pnl_$"].iloc[0] == 40.0  # +20 pts * $2
+    assert log["R"].iloc[0] == 2.0  # 40 / 20

@@ -70,6 +70,48 @@ class BacktestResult:
         running_max = self.equity_curve.cummax()
         return float((self.equity_curve - running_max).min())
 
+    def trade_risk(self, trade: Trade) -> float:
+        """Dollar risk of a trade = |entry - stop| x point value (1 contract).
+
+        The amount that would be lost if the protective stop were hit — the
+        denominator of the trade's R-multiple.
+        """
+        return abs(trade.entry_price - trade.stop) * self.point_value
+
+    @property
+    def avg_risk(self) -> float:
+        """Average dollar risk across closed trades."""
+        if not self.closed:
+            return 0.0
+        return sum(self.trade_risk(t) for t in self.closed) / len(self.closed)
+
+    def trade_log(self) -> pd.DataFrame:
+        """Per-trade table with a Risk $ column and the realized R-multiple.
+
+        R-multiple = net P&L / risk, the trade's result expressed in units of the
+        risk taken (so a +2R win made twice what it risked).
+        """
+        rows = []
+        for t in self.closed:
+            risk = self.trade_risk(t)
+            pnl = t.points * self.point_value - self.commission_rt
+            rows.append(
+                {
+                    "entry_time": t.entry_time,
+                    "dir": "long" if t.direction == 1 else "short",
+                    "setup": t.setup,
+                    "entry": round(t.entry_price, 2),
+                    "stop": round(t.stop, 2),
+                    "risk_$": round(risk, 2),
+                    "exit": round(t.exit_price, 2) if t.exit_price is not None else None,
+                    "reason": t.exit_reason,
+                    "points": round(t.points, 2),
+                    "pnl_$": round(pnl, 2),
+                    "R": round(pnl / risk, 2) if risk > 0 else float("nan"),
+                }
+            )
+        return pd.DataFrame(rows)
+
     def summary(self) -> str:
         """Human-readable one-block summary."""
         return (
@@ -80,6 +122,7 @@ class BacktestResult:
             f"Commissions      : ${self.total_commission:,.2f}\n"
             f"Trades           : {self.num_trades}\n"
             f"Win rate         : {self.win_rate:.1%}\n"
+            f"Avg risk / trade : ${self.avg_risk:,.2f}\n"
             f"Max drawdown     : ${self.max_drawdown:,.2f}"
         )
 
