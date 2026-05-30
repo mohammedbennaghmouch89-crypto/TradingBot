@@ -386,8 +386,14 @@ else if stage == 1
                  border_color=colShort, bgcolor=color.new(colShort, 85))
 
 // Stage 2 -> entry: within entryWindow, a retrace into the FVG fires the trade.
+// FVG-box bookkeeping: keep+extend the box ONLY when an entry fires; otherwise
+// (expired, gate-blocked, invalidated, setup gone) delete it so no empty boxes
+// are left behind.
 else if stage == 2
     if stageAge > entryWindow
+        if not na(fvgBox)
+            box.delete(fvgBox)
+            fvgBox := na
         stage := 0
     else if stageDir == 1
         fvgMid = fvgBot + (fvgTop - fvgBot) * oteMax   // 0.5 = consequent encroachment
@@ -400,8 +406,17 @@ else if stage == 2
                 stopPrice  := sweptExt - atr * stopBuffAtr
                 tp1Price   := na(poc) ? vah : poc      // target 1: fair value (POC)
                 tp2Price   := vah                      // target 2: opposite VA edge
-            stage := 0                                 // reached zone -> resolve setup
+                if not na(fvgBox)
+                    box.set_right(fvgBox, bar_index)   // entry fired -> keep, extend to here
+                    fvgBox := na
+            else if not na(fvgBox)
+                box.delete(fvgBox)                     // gate-blocked -> remove box
+                fvgBox := na
+            stage := 0
         else if not na(sweptExt) and close < sweptExt  // invalidated
+            if not na(fvgBox)
+                box.delete(fvgBox)
+                fvgBox := na
             stage := 0
     else if stageDir == -1
         fvgMid = fvgTop - (fvgTop - fvgBot) * oteMax
@@ -414,12 +429,24 @@ else if stage == 2
                 stopPrice  := sweptExt + atr * stopBuffAtr
                 tp1Price   := na(poc) ? val : poc
                 tp2Price   := val
+                if not na(fvgBox)
+                    box.set_right(fvgBox, bar_index)
+                    fvgBox := na
+            else if not na(fvgBox)
+                box.delete(fvgBox)
+                fvgBox := na
             stage := 0
         else if not na(sweptExt) and close > sweptExt
+            if not na(fvgBox)
+                box.delete(fvgBox)
+                fvgBox := na
             stage := 0
 
-// Reset the sequence if the whole setup expired.
+// Reset the sequence if the whole setup expired (drop any unfilled FVG box too).
 if not setupActive
+    if not na(fvgBox)
+        box.delete(fvgBox)
+        fvgBox := na
     stage := 0
 
 // ============================ DRAWING ========================================

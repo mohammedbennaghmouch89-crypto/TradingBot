@@ -241,6 +241,9 @@ else if stage == 1
             fvgBox := box.new(bar_index, fvgTop, bar_index + 5, fvgBot, border_color=colShort, bgcolor=color.new(colShort, 85))
 else if stage == 2
     if stageAge > entryWindow
+        if not na(fvgBox)
+            box.delete(fvgBox)
+            fvgBox := na
         stage := 0
     else if stageDir == 1
         fvgMid = fvgBot + (fvgTop - fvgBot) * oteMax
@@ -253,8 +256,17 @@ else if stage == 2
                 stopPrice := sweptExt - atr * stopBuffAtr
                 tp1Price := na(poc) ? vah : poc
                 tp2Price := vah
+                if not na(fvgBox)
+                    box.set_right(fvgBox, bar_index)
+                    fvgBox := na
+            else if not na(fvgBox)
+                box.delete(fvgBox)
+                fvgBox := na
             stage := 0
         else if not na(sweptExt) and close < sweptExt
+            if not na(fvgBox)
+                box.delete(fvgBox)
+                fvgBox := na
             stage := 0
     else if stageDir == -1
         fvgMid = fvgTop - (fvgTop - fvgBot) * oteMax
@@ -267,10 +279,22 @@ else if stage == 2
                 stopPrice := sweptExt + atr * stopBuffAtr
                 tp1Price := na(poc) ? val : poc
                 tp2Price := val
+                if not na(fvgBox)
+                    box.set_right(fvgBox, bar_index)
+                    fvgBox := na
+            else if not na(fvgBox)
+                box.delete(fvgBox)
+                fvgBox := na
             stage := 0
         else if not na(sweptExt) and close > sweptExt
+            if not na(fvgBox)
+                box.delete(fvgBox)
+                fvgBox := na
             stage := 0
 if not setupActive
+    if not na(fvgBox)
+        box.delete(fvgBox)
+        fvgBox := na
     stage := 0
 primaryTarget = targetMode == "POC" ? tp1Price : tp2Price
 beLevel = entryPrice + (primaryTarget - entryPrice) * breakevenAt
