@@ -104,7 +104,7 @@ stage 1 swept → 2 armed:   within sweepWindow, MSS & FVG      → store fvgTop
 stage 2 armed → ENTRY:     within entryWindow, retrace into FVG to oteMax
    long:  low  <= fvgBot + (fvgTop-fvgBot)*oteMax
    short: high >= fvgTop - (fvgTop-fvgBot)*oteMax
-   → entry=retrace level; stop=sweptExt ∓ ATR×stopBuffAtr; tp1=POC; tp2=opposite VA edge
+   → entry=retrace level; stop=sweptExt ∓ ATR×stopBuffAtr; exit=tp1=POC; tp2=opposite VA edge (reference)
 
 INVALIDATE: close beyond sweptExt before fill, stage times out, or setup expires → stage:=0
 ```

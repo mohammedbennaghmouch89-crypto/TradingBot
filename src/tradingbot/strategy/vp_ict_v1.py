@@ -382,22 +382,26 @@ def _step_entry(
 def _check_exit(trade: Trade, hi: float, lo: float, t: pd.Timestamp) -> bool:
     """Stop/target check for the open trade. Returns True if it exited this bar.
 
-    Conservative tie-break: if a bar straddles both stop and target, assume the
-    **stop** is hit first (worst case) so the backtest never flatters itself.
+    With a single MNQ contract there is no scaling out, so the position takes
+    profit at **TP1 (POC / fair value)** — the nearer, higher-probability target.
+    This trades a smaller average win for a markedly higher win rate vs. running
+    all the way to the opposite value-area edge (TP2, kept on the trade for
+    reference/labels). Conservative tie-break: if a bar straddles both stop and
+    target, assume the **stop** is hit first so the backtest never flatters itself.
     """
     if trade.direction == 1:
         if lo <= trade.stop:
             _close(trade, t, trade.stop, "stop")
             return True
-        if hi >= trade.tp2:
-            _close(trade, t, trade.tp2, "tp2")
+        if hi >= trade.tp1:
+            _close(trade, t, trade.tp1, "tp1")
             return True
     else:
         if hi >= trade.stop:
             _close(trade, t, trade.stop, "stop")
             return True
-        if lo <= trade.tp2:
-            _close(trade, t, trade.tp2, "tp2")
+        if lo <= trade.tp1:
+            _close(trade, t, trade.tp1, "tp1")
             return True
     return False
 

@@ -102,8 +102,12 @@ retraced, is abandoned rather than left hanging.
 - **Entry:** the FVG retrace level.
 - **Stop:** just beyond the swept extreme (`ATR × stopBuffAtr` buffer) — i.e.
   where "the sweep was real after all" would prove the idea wrong.
-- **Target 1:** back to fair value (**POC**).
-- **Target 2:** the opposite Value-Area edge (VAH for longs, VAL for shorts).
+- **Target 1 (the exit):** back to fair value (**POC**). With a single MNQ
+  contract there is no scaling out, so the trade takes profit here — the nearer,
+  higher-probability target.
+- **Target 2 (reference):** the opposite Value-Area edge (VAH for longs, VAL for
+  shorts). Computed and shown on the chart label, but **not** used as the exit in
+  V1; running to it raises the average win but lowers the win rate materially.
 
 The setup is **invalidated** (arm state cleared) if price closes back beyond the
 swept extreme before the retrace fills, or if the setup window expires.
