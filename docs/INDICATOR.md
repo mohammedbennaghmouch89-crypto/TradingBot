@@ -122,7 +122,14 @@ because (per both skills) these are conventions to be tuned and backtested, not
 fixed constants. Notable defaults: `vpRows=24`, `vaPercent=0.70`,
 `tolAtrMult=0.75`, `minPocEdgeAtr=1.25`, `setupBars=120`, `pivotLen=4`,
 `useCloseForBreak=true`, `oteMax=0.5`, `stopBuffAtr=0.1`, `sweepWindow=60`,
-`entryWindow=60`.
+`entryWindow=60`, `useVwapPD=true`, `useKillzone=false`, `targetMode=POC`.
+
+**Selection filters (applied at the entry trigger).** A session **VWAP**
+(reset each session, `hlc3`-weighted) acts as equilibrium: with `useVwapPD`,
+longs fire only at/below VWAP (discount) and shorts only at/above (premium). With
+`useKillzone`, entries are restricted to the NY-AM window. When a setup reaches
+its FVG but fails a gate, it is dropped (not re-armed). `targetMode` selects the
+single exit target (POC vs opposite VA edge).
 
 ## 8. Outputs
 

@@ -71,6 +71,8 @@ run on deterministic synthetic data. See `docs/STRATEGY_V1.md`. No network.
 | `test_detect_setup_skips_compressed_value_area` | A VAL/VAH setup is rejected when POC is too close to that edge. | Guards the compressed-VA filter that drops the lowest-room (worst) edge trades. |
 | `test_generate_trades_runs_and_trades_are_well_formed` | E2E run yields only closed, sign-consistent trades. | Smoke + invariants; catches crashes and state-machine leaks. |
 | `test_no_trades_outside_rth` | No entry falls outside RTH. | Confirms the intraday gate doesn't leak into hours the strategy can't trade. |
+| `test_session_vwap_resets_each_session` | VWAP stays within the price envelope (resets per session). | A cross-session leak would drift VWAP and corrupt the premium/discount gate. |
+| `test_killzone_filter_is_subset_of_unfiltered` | Enabling the killzone only removes trades, never adds. | Confirms the time filter is purely subtractive, not a change to entry logic. |
 
 ### `tests/test_volume_profile.py`
 

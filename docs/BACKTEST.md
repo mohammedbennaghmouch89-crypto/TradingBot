@@ -40,8 +40,9 @@ Options: `--days N` (history to fetch, default 21), `--balance` (default 25000),
 | Commission | **~$1.00 round-trip** (configurable) |
 
 P&L per trade = `points × $2 − commission`. One position at a time; positions
-exit on stop, TP1 (POC / fair value — the working target for a single contract),
-or the RTH session close (no overnight risk).
+exit on stop, the `target_mode` target (default POC / fair value), or the RTH
+session close (no overnight risk). Entries are additionally gated by the VWAP
+premium/discount filter (on) and an optional NY-AM killzone filter (off).
 
 ## Data source & its limits (important)
 

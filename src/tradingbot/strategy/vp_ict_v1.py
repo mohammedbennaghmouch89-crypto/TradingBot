@@ -58,6 +58,22 @@ class Params:
     # gentle (1.25): on this small sample, win rate improves up to ~1.25 ATR but
     # larger values overfit (one dropped setup re-routes the sequence badly).
     min_poc_edge_atr: float = 1.25
+    # --- Trade-selection filters (ICT/VP confluence; see docs/STRATEGY_V1.md) ---
+    # VWAP premium/discount gate: take longs only at/below VWAP (discount) and
+    # shorts only at/above VWAP (premium) — VWAP as the equilibrium/fair value.
+    # On the test window this ~doubled net P&L and lowered drawdown while keeping
+    # a usable trade count, so it is on by default.
+    use_vwap_pd: bool = True
+    # Killzone: only enter inside the high-probability NY-AM window (minutes from
+    # NY midnight). 09:30-11:30 ET captures the NY open + the 10-11 Silver Bullet.
+    # Off by default: it lifts win rate sharply but cuts the 3-week sample to a
+    # handful of trades (overfit risk). Enable once more data is available.
+    use_killzone: bool = False
+    killzone_start_min: int = 9 * 60 + 30
+    killzone_end_min: int = 11 * 60 + 30
+    # Exit target: "poc" (nearer, higher win rate) or "opposite_edge" (TP2,
+    # further, bigger winners). POC default keeps the higher win rate.
+    target_mode: str = "poc"
 
 
 @dataclass
@@ -110,6 +126,26 @@ def _atr(df: pd.DataFrame, length: int) -> pd.Series:
         axis=1
     )
     return tr.ewm(alpha=1 / length, adjust=False).mean()
+
+
+def _session_vwap(df: pd.DataFrame) -> np.ndarray:
+    """Session-anchored VWAP, reset each RTH day (NY).
+
+    VWAP = cumulative(typical_price x volume) / cumulative(volume) within the
+    session. Used as the equilibrium / fair-value reference for the ICT
+    premium-discount entry gate (VP↔ICT mapping: VWAP ↔ equilibrium).
+    """
+    typical = (df["high"] + df["low"] + df["close"]) / 3.0
+    sid = pd.Series(_session_id(df.index), index=df.index)
+    pv = (typical * df["volume"]).groupby(sid).cumsum()
+    vol = df["volume"].groupby(sid).cumsum().replace(0, np.nan)
+    return np.asarray((pv / vol).to_numpy(dtype=float))
+
+
+def _ny_minutes(index: pd.DatetimeIndex) -> np.ndarray:
+    """Minutes since NY midnight for each bar (for the killzone window)."""
+    local = index.tz_convert(RTH_TZ)
+    return np.asarray(local.hour * 60 + local.minute)
 
 
 def _build_session_profiles(df5: pd.DataFrame, p: Params) -> dict[int, _SessionProfile]:
@@ -177,6 +213,8 @@ def generate_trades(df1: pd.DataFrame, df5: pd.DataFrame, p: Params) -> list[Tra
     in_rth = _rth_mask(df1.index)
     df1_sid = _session_id(df1.index)
     atr1 = _atr(df1, p.atr_len).to_numpy()
+    vwap1 = _session_vwap(df1)
+    ny_min = _ny_minutes(df1.index)
 
     high = df1["high"].to_numpy(dtype=float)
     low = df1["low"].to_numpy(dtype=float)
@@ -212,7 +250,7 @@ def generate_trades(df1: pd.DataFrame, df5: pd.DataFrame, p: Params) -> list[Tra
 
         # ---- manage an open position first ----
         if open_trade is not None:
-            if _check_exit(open_trade, high[i], low[i], times[i]):
+            if _check_exit(open_trade, high[i], low[i], times[i], p):
                 open_trade = None
             else:
                 continue  # one position at a time
@@ -236,8 +274,24 @@ def generate_trades(df1: pd.DataFrame, df5: pd.DataFrame, p: Params) -> list[Tra
             continue
         sh, sl = last_sh[i], last_sl[i]
         a = atr1[i] if not np.isnan(atr1[i]) else 0.0
+        kz_ok = (not p.use_killzone) or (p.killzone_start_min <= ny_min[i] < p.killzone_end_min)
+        vwap = vwap1[i]
         open_trade = _step_entry(
-            entry, setup_bias, setup_name, i, high, low, close, times, sh, sl, prof, a, p
+            entry,
+            setup_bias,
+            setup_name,
+            i,
+            high,
+            low,
+            close,
+            times,
+            sh,
+            sl,
+            prof,
+            a,
+            kz_ok,
+            vwap,
+            p,
         )
         if open_trade is not None:
             trades.append(open_trade)
@@ -327,6 +381,8 @@ def _step_entry(
     sl: float,
     prof: Profile,
     atr1: float,
+    kz_ok: bool,
+    vwap: float,
     p: Params,
 ) -> Trade | None:
     """Advance the sequential ICT entry machine by one 1m bar.
@@ -380,43 +436,53 @@ def _step_entry(
     if e.direction == 1:
         level = e.fvg_bot + (e.fvg_top - e.fvg_bot) * p.ote_max
         if low[i] <= level:
-            stop = e.swept_ext - atr1 * p.stop_buf_atr
-            return Trade(1, name, times[i], level, stop, prof.poc, prof.vah)
-        if close[i] < e.swept_ext:  # invalidated: closed back beyond the sweep
+            # Selection gates: NY killzone + discount to VWAP (long).
+            pd_ok = (not p.use_vwap_pd) or np.isnan(vwap) or level <= vwap
+            if kz_ok and pd_ok:
+                stop = e.swept_ext - atr1 * p.stop_buf_atr
+                return Trade(1, name, times[i], level, stop, prof.poc, prof.vah)
+            e.reset()  # arrived at the zone but failed a gate -> drop the setup
+        elif close[i] < e.swept_ext:  # invalidated: closed back beyond the sweep
             e.reset()
     else:
         level = e.fvg_top - (e.fvg_top - e.fvg_bot) * p.ote_max
         if high[i] >= level:
-            stop = e.swept_ext + atr1 * p.stop_buf_atr
-            return Trade(-1, name, times[i], level, stop, prof.poc, prof.val)
-        if close[i] > e.swept_ext:
+            pd_ok = (not p.use_vwap_pd) or np.isnan(vwap) or level >= vwap
+            if kz_ok and pd_ok:
+                stop = e.swept_ext + atr1 * p.stop_buf_atr
+                return Trade(-1, name, times[i], level, stop, prof.poc, prof.val)
+            e.reset()
+        elif close[i] > e.swept_ext:
             e.reset()
     return None
 
 
-def _check_exit(trade: Trade, hi: float, lo: float, t: pd.Timestamp) -> bool:
+def _check_exit(trade: Trade, hi: float, lo: float, t: pd.Timestamp, p: Params) -> bool:
     """Stop/target check for the open trade. Returns True if it exited this bar.
 
-    With a single MNQ contract there is no scaling out, so the position takes
-    profit at **TP1 (POC / fair value)** — the nearer, higher-probability target.
-    This trades a smaller average win for a markedly higher win rate vs. running
-    all the way to the opposite value-area edge (TP2, kept on the trade for
-    reference/labels). Conservative tie-break: if a bar straddles both stop and
-    target, assume the **stop** is hit first so the backtest never flatters itself.
+    With a single MNQ contract there is no scaling out, so the position takes a
+    single target chosen by ``p.target_mode``: ``"poc"`` (TP1 — nearer, highest
+    win rate) or ``"opposite_edge"`` (TP2 — the full value-area rotation, bigger
+    winners). With the selection filters raising trade quality, running to TP2 is
+    viable and lifts profit. Conservative tie-break: if a bar straddles both stop
+    and target, assume the **stop** is hit first so the backtest never flatters
+    itself.
     """
+    target = trade.tp1 if p.target_mode == "poc" else trade.tp2
+    reason = "tp1" if p.target_mode == "poc" else "tp2"
     if trade.direction == 1:
         if lo <= trade.stop:
             _close(trade, t, trade.stop, "stop")
             return True
-        if hi >= trade.tp1:
-            _close(trade, t, trade.tp1, "tp1")
+        if hi >= target:
+            _close(trade, t, target, reason)
             return True
     else:
         if hi >= trade.stop:
             _close(trade, t, trade.stop, "stop")
             return True
-        if lo <= trade.tp1:
-            _close(trade, t, trade.tp1, "tp1")
+        if lo <= target:
+            _close(trade, t, target, reason)
             return True
     return False
 

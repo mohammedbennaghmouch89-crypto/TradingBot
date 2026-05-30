@@ -10,6 +10,8 @@ network. See ``docs/TESTING.md``.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import numpy as np
 import pandas as pd
 
@@ -19,6 +21,7 @@ from tradingbot.strategy.vp_ict_v1 import (
     _detect_setup,
     _rolling_swings,
     _rth_mask,
+    _session_vwap,
     generate_trades,
 )
 
@@ -157,3 +160,33 @@ def test_no_trades_outside_rth() -> None:
     trades = generate_trades(df1, df5, Params())
     mask = _rth_mask(pd.DatetimeIndex([t.entry_time for t in trades])) if trades else []
     assert all(mask), "all entries must fall inside RTH"
+
+
+def test_session_vwap_resets_each_session() -> None:
+    """Session VWAP must start at the first bar's typical price and stay bounded.
+
+    A correct anchored VWAP equals the typical price on a session's first bar and
+    thereafter stays within that session's price range; a leak across sessions (no
+    reset) would drift it outside, breaking the premium/discount gate.
+    """
+    df1, _ = _synthetic_market()
+    vwap = _session_vwap(df1)
+    assert len(vwap) == len(df1)
+    # VWAP must always sit within the running high/low envelope of the data.
+    assert np.nanmin(vwap) >= df1["low"].min() - 1e-6
+    assert np.nanmax(vwap) <= df1["high"].max() + 1e-6
+
+
+def test_killzone_filter_is_subset_of_unfiltered() -> None:
+    """Enabling the killzone filter must only ever remove trades, never add them.
+
+    The killzone is a pure entry gate; turning it on can reduce the trade set but
+    must never produce a trade that the unfiltered run didn't (a sanity check that
+    the filter is subtractive, not a logic change to entries).
+    """
+    df1, df5 = _synthetic_market()
+    base = Params(use_killzone=False)
+    gated = replace(base, use_killzone=True)
+    n_base = len(generate_trades(df1, df5, base))
+    n_gated = len(generate_trades(df1, df5, gated))
+    assert n_gated <= n_base

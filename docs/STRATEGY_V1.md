@@ -109,15 +109,33 @@ retraced, is abandoned rather than left hanging.
 - **Entry:** the FVG retrace level.
 - **Stop:** just beyond the swept extreme (`ATR × stopBuffAtr` buffer) — i.e.
   where "the sweep was real after all" would prove the idea wrong.
-- **Target 1 (the exit):** back to fair value (**POC**). With a single MNQ
-  contract there is no scaling out, so the trade takes profit here — the nearer,
-  higher-probability target.
-- **Target 2 (reference):** the opposite Value-Area edge (VAH for longs, VAL for
-  shorts). Computed and shown on the chart label, but **not** used as the exit in
-  V1; running to it raises the average win but lowers the win rate materially.
+- **Exit target (`targetMode`):** with a single MNQ contract there is no scaling
+  out, so one target is taken. **`POC`** (default) = back to fair value — the
+  nearer, higher-win-rate target. **`opposite_edge`** = the opposite Value-Area
+  edge (full rotation) — bigger winners, lower win rate. Both levels are computed
+  and shown on the chart label regardless.
 
 The setup is **invalidated** (arm state cleared) if price closes back beyond the
 swept extreme before the retrace fills, or if the setup window expires.
+
+### Selection filters (trade quality — raise win rate *and* profit)
+
+The biggest gains come not from tuning a single knob (closer/further target just
+trades win rate for average win) but from **only taking the better setups**. Two
+skill-backed confluence filters, applied at the entry trigger:
+
+- **VWAP premium/discount gate** (`useVwapPD`, **on**). VWAP is fair value /
+  equilibrium (VP↔ICT mapping). Take **longs only at/below VWAP** (a discount)
+  and **shorts only at/above VWAP** (a premium). On the test window this roughly
+  **doubled net P&L (+$113 → +$208) and cut drawdown (−$259 → −$199)** while
+  keeping a usable trade count (~11), win rate steady (~46%).
+- **Killzone time filter** (`useKillzone`, **off** by default). Only enter inside
+  the high-probability NY-AM window (≈09:30–11:30 ET, incl. the 10–11 Silver
+  Bullet). It pushes win rate to ~60–67% and lowers drawdown further, but on a
+  3-week sample it leaves only 3–5 trades — too few to trust, so it ships off and
+  is enabled once more data is available.
+
+These compose with the compressed-value-area filter above; all are configurable.
 
 ## 5. End-to-end example (long)
 
@@ -146,6 +164,9 @@ swept extreme before the retrace fills, or if the setup window expires.
 | `entry_window` | 60 | Bars after arming the FVG to still accept the retrace. |
 | `oteMax` | 0.5 | Required retrace into the FVG before entering. |
 | `stopBuffAtr` | 0.1 | Stop buffer beyond the swept extreme. |
+| `useVwapPD` | true | VWAP premium/discount gate (long ≤ VWAP, short ≥ VWAP). |
+| `useKillzone` | false | Restrict entries to the NY-AM killzone window. |
+| `targetMode` | `POC` | Exit target: `POC` (win rate) or `opposite_edge` (profit). |
 
 Every default is a **convention, not a validated constant** (both skills flag
 this) — they exist to be tuned and, in Phase 2, backtested.

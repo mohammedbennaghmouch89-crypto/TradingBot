@@ -85,6 +85,16 @@ sweepWindow = input.int(60, "Bars after sweep to find MSS+FVG", minval=1, maxval
 entryWindow = input.int(60, "Bars after FVG to find retrace entry", minval=1, maxval=200, group=grpICT,
      tooltip="After the FVG arms, the retrace entry must occur within this many bars.")
 
+// ---- Trade-selection filters (ICT/VP confluence) ----
+grpFilt    = "Selection filters"
+useVwapPD  = input.bool(true, "VWAP premium/discount gate", group=grpFilt,
+     tooltip="Longs only at/below session VWAP (discount); shorts only at/above (premium). VWAP = equilibrium.")
+useKillzone = input.bool(false, "Killzone time filter (NY AM)", group=grpFilt,
+     tooltip="Only enter inside the NY-AM window. Lifts win rate but is selective (few trades). Off by default.")
+kzStart    = input.session("0930-1130", "Killzone window (NY)", group=grpFilt)
+targetMode = input.string("POC", "Exit target", options=["POC","Opposite VA edge"], group=grpFilt,
+     tooltip="POC = nearer, higher win rate. Opposite edge = TP2, bigger winners.")
+
 // ---- Visuals ----
 grpViz     = "Visuals"
 showHisto  = input.bool(true,  "Draw profile histogram", group=grpViz)
@@ -115,6 +125,19 @@ if newSession
     array.clear(sH)
     array.clear(sL)
     array.clear(sV)
+
+// Session VWAP (equilibrium / fair value) for the premium-discount gate, and the
+// killzone flag for the time filter. VWAP resets each session window.
+var float vwapPV  = na
+var float vwapVol = na
+if newSession
+    vwapPV  := hlc3 * volume
+    vwapVol := volume
+else
+    vwapPV  := nz(vwapPV) + hlc3 * volume
+    vwapVol := nz(vwapVol) + volume
+sessionVwap = vwapVol > 0 ? vwapPV / vwapVol : na
+inKillzone = not na(time(timeframe.period, kzStart, vpTz))
 
 // Accumulate the just-closed bar's data while inside the session.
 if inSession and barstate.isconfirmed
@@ -348,24 +371,30 @@ else if stage == 2
         stage := 0
     else if stageDir == 1
         fvgMid = fvgBot + (fvgTop - fvgBot) * oteMax   // 0.5 = consequent encroachment
+        kzOk = not useKillzone or inKillzone
+        pdOk = not useVwapPD or na(sessionVwap) or fvgMid <= sessionVwap   // discount
         if low <= fvgMid
-            longEntry  := true
-            entryPrice := fvgMid
-            stopPrice  := sweptExt - atr * stopBuffAtr
-            tp1Price   := na(poc) ? vah : poc          // target 1: fair value (POC)
-            tp2Price   := vah                          // target 2: opposite VA edge
-            stage      := 0
+            if kzOk and pdOk
+                longEntry  := true
+                entryPrice := fvgMid
+                stopPrice  := sweptExt - atr * stopBuffAtr
+                tp1Price   := na(poc) ? vah : poc      // target 1: fair value (POC)
+                tp2Price   := vah                      // target 2: opposite VA edge
+            stage := 0                                 // reached zone -> resolve setup
         else if not na(sweptExt) and close < sweptExt  // invalidated
             stage := 0
     else if stageDir == -1
         fvgMid = fvgTop - (fvgTop - fvgBot) * oteMax
+        kzOk = not useKillzone or inKillzone
+        pdOk = not useVwapPD or na(sessionVwap) or fvgMid >= sessionVwap   // premium
         if high >= fvgMid
-            shortEntry := true
-            entryPrice := fvgMid
-            stopPrice  := sweptExt + atr * stopBuffAtr
-            tp1Price   := na(poc) ? val : poc
-            tp2Price   := val
-            stage      := 0
+            if kzOk and pdOk
+                shortEntry := true
+                entryPrice := fvgMid
+                stopPrice  := sweptExt + atr * stopBuffAtr
+                tp1Price   := na(poc) ? val : poc
+                tp2Price   := val
+            stage := 0
         else if not na(sweptExt) and close > sweptExt
             stage := 0
 
@@ -460,6 +489,10 @@ if showNodes and barstate.islast and not na(profRowH) and array.size(bins) >= 2 
         else if isLVN
             label.new(bar_index, rowP, "LVN", style=label.style_label_left,
                  color=color.new(color.red, 80), textcolor=color.red, size=size.tiny)
+
+// Session VWAP (equilibrium reference for the premium/discount gate).
+plot(useVwapPD ? sessionVwap : na, title="Session VWAP",
+     color=color.new(color.purple, 0), linewidth=1)
 
 // Setup marker.
 plotshape(newSetup and setupBias == 1,  title="Long setup",  style=shape.diamond,
