@@ -179,7 +179,11 @@ f_valueArea(float[] bins, int poc, float target) =>
 // Returns POC/VAH/VAL prices, the bins array, the bottom price and row height.
 f_buildProfile() =>
     n = array.size(sV)
-    float pocP = na, vahP = na, valP = na, botP = na, rowH = na
+    float pocP = na
+    float vahP = na
+    float valP = na
+    float botP = na
+    float rowH = na
     float[] bins = array.new_float(vpRows, 0.0)
     if n > 0
         hi = array.get(sH, 0)
