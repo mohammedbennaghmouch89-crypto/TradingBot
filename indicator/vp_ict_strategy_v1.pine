@@ -178,7 +178,8 @@ f_valueArea(float[] bins, int poc, float target) =>
 // ---- Build profile from the session arrays ----------------------------------
 // Returns POC/VAH/VAL prices, the bins array, the bottom price and row height.
 f_buildProfile() =>
-    n = array.size(sV)
+    // Use the smallest of the three arrays so a read can never go out of bounds.
+    n = math.min(array.size(sH), math.min(array.size(sL), array.size(sV)))
     float pocP = na
     float vahP = na
     float valP = na
