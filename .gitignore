@@ -33,6 +33,7 @@ coverage.xml
 *.log
 data/
 logs/
+reports/
 *.csv
 *.parquet
 
