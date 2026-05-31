@@ -38,9 +38,33 @@ Everything is on the **free tier** ($0/month).
 | `orders`    | Orders sent to the broker, with fill price + raw broker response. |
 | `positions` | Position lifecycle; one open position per symbol (enforced by a partial unique index) unless pyramiding is enabled. |
 | `pnl_daily` | Per-day trade count + realized P&L — drives the daily caps. |
+| `market`    | Latest price/high/low per symbol (updated by `mark` webhooks). |
+| `v_account` (view) | Live equity = `starting_equity + Σ realized + Σ open unrealized`. |
+| `v_open_positions` (view) | Open positions with current unrealized P&L. |
 
 **Security:** RLS is enabled on every table with **no policies**, so only the
 Edge Function (service role) can touch them. Public/anon clients are blocked.
+The views use `security_invoker` so they respect that same RLS.
+
+## Paper-trading engine
+
+The built-in **paper broker** simulates fills so the whole system runs free,
+with no broker account:
+
+- **Realistic fills** — entries and stop/market exits get adverse slippage of
+  `slippage_ticks × tick_size`; take-profit fills are treated as limits (no
+  adverse slippage). `commission_per_side_usd` is booked round-turn at exit.
+- **Automatic SL/TP** — a `mark` price webhook (see below) checks the open
+  position against its `stop`/`tp1`/`tp2` and exits automatically. Stop is
+  checked first (conservative when a bar straddles both).
+- **Partial take-profit** — when `contracts_per_trade > 1`, TP1 scales out half
+  and moves the stop to breakeven; the runner exits at TP2 (or the BE stop).
+- **Equity tracking** — `mark` updates unrealized P&L; `v_account` gives live
+  equity. P&L math: `(exit − entry) × dir × qty × point_value_usd − commission`
+  (MNQ point value = $2).
+
+Swapping in a real broker later = adding a branch in `insertOrder()` /
+`closePosition()` and setting `bot_config.broker`.
 
 ## Risk controls (all in `bot_config`)
 
@@ -54,13 +78,23 @@ Checked in order, before any order is placed:
 6. `allow_pyramiding` — when false, a same-side signal while in a position is
    rejected; an opposite-side signal flattens and reverses.
 
-## How a signal is handled
+## Webhook actions
 
-- **buy / sell** → opens a position (or reverses an opposite one).
-- **close** → flattens the open position and books realized P&L
-  `(exit − entry) × dir × qty × point_value_usd` (MNQ point value = $2).
-- Duplicate same-side entry → `rejected: position_already_open`.
+All actions take the shared-secret `token` (query or body).
+
+| `action` | Effect |
+|----------|--------|
+| `buy` / `sell` | Open (or reverse) a position; applies entry slippage. |
+| `close` | Flatten the open position at market (adverse slippage). |
+| `mark`  | Price heartbeat: `{"action":"mark","price":18010,"high":18012,"low":18007}` → mark-to-market + automatic SL/TP exits. Not logged as a signal, and runs even when the kill switch is off so exits still fire. |
+
+Notes:
+- Duplicate same-side entry (no pyramiding) → `rejected: position_already_open`.
 - Bad/missing token → `401 unauthorized`.
+- For SL/TP automation you need a `mark` feed. Add a second TradingView alert
+  on every bar close that posts the `mark` payload (use `{{high}}`/`{{low}}`/
+  `{{close}}` placeholders), or send it from any price source. Without marks,
+  exits only happen on an explicit `close` signal.
 
 ## TradingView alert setup (Premium)
 
